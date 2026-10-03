@@ -3,7 +3,9 @@ package database
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +123,206 @@ func TestFoundationMigrationSeedAndPrivileges(t *testing.T) {
 	}
 	if _, err := runtimePool.Exec(ctx, "CREATE TABLE unauthorized_table (id INT)"); err == nil {
 		t.Fatal("runtime role unexpectedly has DDL permission")
+	}
+}
+
+func TestCheckSchemaRequiresExactMigrationLedger(t *testing.T) {
+	pool := testPool(t, "LABRESERVE_TEST_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("prepare migration ledger: %v", err)
+	}
+	if err := CheckSchema(ctx, pool); err != nil {
+		t.Fatalf("exact migration state should be accepted: %v", err)
+	}
+
+	t.Run("missing required migration", func(t *testing.T) {
+		t.Cleanup(func() { restoreExpectedMigrationLedger(t, pool) })
+		if _, err := pool.Exec(ctx, "DELETE FROM schema_migrations WHERE version = $1", requiredSchemaVersion); err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckSchema(ctx, pool); err == nil || !strings.Contains(err.Error(), "database schema is missing "+requiredSchemaVersion) {
+			t.Fatalf("startup schema check error = %v, want missing required migration", err)
+		}
+	})
+
+	t.Run("unknown newer migration", func(t *testing.T) {
+		t.Cleanup(func() { restoreExpectedMigrationLedger(t, pool) })
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO schema_migrations (version, checksum)
+			VALUES ('999_incompatible_schema.sql', repeat('0', 64))`); err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckSchema(ctx, pool); err == nil || !strings.Contains(err.Error(), "unknown migration 999_incompatible_schema.sql") {
+			t.Fatalf("startup schema check error = %v, want unknown migration rejection", err)
+		}
+	})
+
+	t.Run("known checksum mismatch", func(t *testing.T) {
+		t.Cleanup(func() { restoreExpectedMigrationLedger(t, pool) })
+		if _, err := pool.Exec(ctx, "UPDATE schema_migrations SET checksum = repeat('0', 64) WHERE version = $1", requiredSchemaVersion); err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckSchema(ctx, pool); err == nil || !strings.Contains(err.Error(), "checksum changed after application") {
+			t.Fatalf("startup schema check error = %v, want checksum mismatch rejection", err)
+		}
+	})
+}
+
+func restoreExpectedMigrationLedger(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	migrations, err := readEmbeddedMigrationChecksums()
+	if err != nil {
+		t.Errorf("read expected migration ledger for cleanup: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Errorf("begin migration-ledger cleanup: %v", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "DELETE FROM schema_migrations"); err != nil {
+		t.Errorf("clear migration ledger during cleanup: %v", err)
+		return
+	}
+	for _, migration := range migrations {
+		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)", migration.version, migration.checksum); err != nil {
+			t.Errorf("restore migration %s during cleanup: %v", migration.version, err)
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Errorf("commit migration-ledger cleanup: %v", err)
+	}
+}
+
+func TestConcurrentCaseInsensitiveResourceCodeUniqueness(t *testing.T) {
+	pool := testPool(t, "LABRESERVE_TEST_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("prepare resource schema: %v", err)
+	}
+
+	var code string
+	if err := pool.QueryRow(ctx, `
+		SELECT 'RACE-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 16))`).Scan(&code); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM resources WHERE lower(code) = lower($1)", code); err != nil {
+			t.Errorf("remove concurrent uniqueness fixture: %v", err)
+		}
+	})
+
+	firstConn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstConn.Release()
+	firstTx, err := firstConn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstTx.Rollback(context.Background())
+
+	secondConn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondConn.Release()
+	secondTx, err := secondConn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondTx.Rollback(context.Background())
+
+	var firstPID, secondPID int32
+	if err := firstConn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&firstPID); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondConn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&secondPID); err != nil {
+		t.Fatal(err)
+	}
+	if firstPID == secondPID {
+		t.Fatal("concurrent inserts did not use independent PostgreSQL connections")
+	}
+	if _, err := firstTx.Exec(ctx, `
+		INSERT INTO resources (id, code, name, description)
+		VALUES (gen_random_uuid(), $1, 'concurrent uniqueness fixture', '')`, code); err != nil {
+		t.Fatalf("insert first resource code: %v", err)
+	}
+
+	secondResult := make(chan error, 1)
+	go func() {
+		_, err := secondTx.Exec(ctx, `
+			INSERT INTO resources (id, code, name, description)
+			VALUES (gen_random_uuid(), $1, 'concurrent uniqueness fixture', '')`, strings.ToLower(code))
+		secondResult <- err
+	}()
+
+	waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer waitCancel()
+	if err := waitForPostgresBlock(waitCtx, pool, secondPID); err != nil {
+		_ = firstTx.Rollback(context.Background())
+		select {
+		case insertErr := <-secondResult:
+			_ = secondTx.Rollback(context.Background())
+			t.Fatalf("second case variant did not wait on the uncommitted unique key: %v (insert result: %v)", err, insertErr)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("second case variant did not finish after releasing the first transaction: %v", err)
+		}
+	}
+
+	if err := firstTx.Commit(ctx); err != nil {
+		t.Fatalf("commit first case variant: %v", err)
+	}
+	var secondErr error
+	select {
+	case secondErr = <-secondResult:
+	case <-ctx.Done():
+		t.Fatalf("second insert did not finish after the first transaction committed: %v", ctx.Err())
+	}
+	var postgresErr *pgconn.PgError
+	if !errors.As(secondErr, &postgresErr) || postgresErr.Code != "23505" {
+		t.Fatalf("second case variant error = %v, want PostgreSQL unique violation", secondErr)
+	}
+	if err := secondTx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback rejected second insert: %v", err)
+	}
+
+	var retained int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM resources WHERE lower(code) = lower($1)", code).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if retained != 1 {
+		t.Fatalf("concurrent case variants retained %d resource rows, want exactly one", retained)
+	}
+}
+
+func waitForPostgresBlock(ctx context.Context, pool *pgxpool.Pool, pid int32) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var blocked bool
+		if err := pool.QueryRow(ctx, "SELECT cardinality(pg_blocking_pids($1)) > 0", pid).Scan(&blocked); err != nil {
+			return fmt.Errorf("observe concurrent unique-index wait: %w", err)
+		}
+		if blocked {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 

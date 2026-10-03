@@ -14,6 +14,14 @@ trap 'exit 143' TERM
 
 printf '%s\n' 'Building pinned application, PostgreSQL, Go-test, and Playwright images...'
 compose build verify-migrate verify-seed verify-go verify-app e2e
+printf '%s\n' 'Checking Go formatting...'
+compose run --rm --no-deps verify-go sh -ec '
+  unformatted=$(gofmt -l $(find cmd internal -type f -name "*.go"))
+  if [ -n "$unformatted" ]; then
+    printf "Go files require gofmt:\n%s\n" "$unformatted" >&2
+    exit 1
+  fi
+'
 printf '%s\n' 'Starting isolated disposable PostgreSQL verification database...'
 compose up --wait -d verify-db
 compose run --rm verify-migrate

@@ -21,6 +21,89 @@ var migrationFiles embed.FS
 const requiredSchemaVersion = "001_foundation.sql"
 const migrationLockID int64 = 0x4c61625265736572
 
+type migrationChecksum struct {
+	version  string
+	checksum string
+	contents []byte
+}
+
+type migrationLedgerQueryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func readEmbeddedMigrationChecksums() ([]migrationChecksum, error) {
+	entries, err := fs.ReadDir(migrationFiles, "migrations")
+	if err != nil {
+		return nil, fmt.Errorf("read embedded migrations: %w", err)
+	}
+	versions := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && len(entry.Name()) > 4 && entry.Name()[len(entry.Name())-4:] == ".sql" {
+			versions = append(versions, entry.Name())
+		}
+	}
+	sort.Strings(versions)
+
+	migrations := make([]migrationChecksum, 0, len(versions))
+	requiredFound := false
+	for _, version := range versions {
+		contents, err := migrationFiles.ReadFile("migrations/" + version)
+		if err != nil {
+			return nil, fmt.Errorf("read migration %s: %w", version, err)
+		}
+		digest := sha256.Sum256(contents)
+		migrations = append(migrations, migrationChecksum{
+			version: version, checksum: hex.EncodeToString(digest[:]), contents: contents,
+		})
+		if version == requiredSchemaVersion {
+			requiredFound = true
+		}
+	}
+	if !requiredFound {
+		return nil, fmt.Errorf("embedded migrations are missing %s", requiredSchemaVersion)
+	}
+	return migrations, nil
+}
+
+func validateMigrationLedger(ctx context.Context, db migrationLedgerQueryer, expected []migrationChecksum, requireComplete bool) error {
+	known := make(map[string]string, len(expected))
+	for _, migration := range expected {
+		known[migration.version] = migration.checksum
+	}
+
+	rows, err := db.Query(ctx, "SELECT version, checksum FROM schema_migrations ORDER BY version")
+	if err != nil {
+		return fmt.Errorf("read migration ledger: %w", err)
+	}
+	defer rows.Close()
+	recorded := make(map[string]struct{}, len(expected))
+	for rows.Next() {
+		var version, checksum string
+		if err := rows.Scan(&version, &checksum); err != nil {
+			return fmt.Errorf("read migration ledger row: %w", err)
+		}
+		expectedChecksum, ok := known[version]
+		if !ok {
+			return fmt.Errorf("database contains unknown migration %s", version)
+		}
+		if checksum != expectedChecksum {
+			return fmt.Errorf("migration %s checksum changed after application", version)
+		}
+		recorded[version] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read migration ledger rows: %w", err)
+	}
+	if requireComplete {
+		for _, migration := range expected {
+			if _, ok := recorded[migration.version]; !ok {
+				return fmt.Errorf("database schema is missing %s; run labreserve migrate", migration.version)
+			}
+		}
+	}
+	return nil
+}
+
 func Migrate(ctx context.Context, pool *pgxpool.Pool) (resultErr error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -49,25 +132,16 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) (resultErr error) {
 	if _, err := conn.Exec(ctx, "GRANT SELECT ON schema_migrations TO labreserve_app"); err != nil {
 		return fmt.Errorf("grant migration ledger access: %w", err)
 	}
-
-	entries, err := fs.ReadDir(migrationFiles, "migrations")
+	expected, err := readEmbeddedMigrationChecksums()
 	if err != nil {
-		return fmt.Errorf("read embedded migrations: %w", err)
+		return err
 	}
-	files := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() && len(entry.Name()) > 4 && entry.Name()[len(entry.Name())-4:] == ".sql" {
-			files = append(files, entry.Name())
-		}
+	if err := validateMigrationLedger(ctx, conn, expected, false); err != nil {
+		return fmt.Errorf("validate existing migration state: %w", err)
 	}
-	sort.Strings(files)
-	for _, name := range files {
-		contents, err := migrationFiles.ReadFile("migrations/" + name)
-		if err != nil {
-			return fmt.Errorf("read migration %s: %w", name, err)
-		}
-		digest := sha256.Sum256(contents)
-		checksum := hex.EncodeToString(digest[:])
+
+	for _, migration := range expected {
+		name, contents, checksum := migration.version, migration.contents, migration.checksum
 		var recorded string
 		err = conn.QueryRow(ctx, "SELECT checksum FROM schema_migrations WHERE version = $1", name).Scan(&recorded)
 		if err == nil {
@@ -100,13 +174,12 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) (resultErr error) {
 }
 
 func CheckSchema(ctx context.Context, pool *pgxpool.Pool) error {
-	var applied bool
-	err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)", requiredSchemaVersion).Scan(&applied)
+	expected, err := readEmbeddedMigrationChecksums()
 	if err != nil {
-		return fmt.Errorf("check database schema (run labreserve migrate): %w", err)
+		return fmt.Errorf("read expected database migrations: %w", err)
 	}
-	if !applied {
-		return fmt.Errorf("database schema is missing %s; run labreserve migrate", requiredSchemaVersion)
+	if err := validateMigrationLedger(ctx, pool, expected, true); err != nil {
+		return fmt.Errorf("check database schema (run labreserve migrate): %w", err)
 	}
 	return nil
 }
