@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "header" .}}
+<main>
+  <p><a href="/resources">← All resources</a></p>
+  <h1>{{.Resource.Code}} — {{.Resource.Name}}</h1>
+  <p class="state {{if .Resource.Active}}active{{else}}inactive{{end}}">{{if .Resource.Active}}Active{{else}}Inactive{{end}}</p>
+  <p>{{.Resource.Description}}</p>
+  {{if not .Resource.Active}}<p class="notice">This resource is inactive.</p>{{end}}
+  <section aria-labelledby="schedule-heading">
+    <h2 id="schedule-heading">Schedule</h2>
+    <form method="get" class="date-picker">
+      <label for="date">Date (Asia/Jakarta)</label>
+      <input id="date" name="date" type="date" value="{{.Date}}" required>
+      <button type="submit">View date</button>
+    </form>
+    <h3>Schedule for <time>{{.Date}} (Asia/Jakarta)</time></h3>
+    <p class="notice" id="empty-schedule">No bookings are scheduled for this date.</p>
+  </section>
+</main>
+{{template "footer" .}}

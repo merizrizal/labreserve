@@ -1,0 +1,189 @@
+name: labreserve
+
+services:
+  db:
+    image: postgres:17.7-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?copy .env.example to .env first}
+      POSTGRES_DB: labreserve
+      MIGRATION_DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}
+    command: ["postgres", "-c", "timezone=UTC"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres/01-roles.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-54329}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d labreserve"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: labreserve-app:dev
+    command: ["serve"]
+    environment:
+      DATABASE_URL: "postgres://labreserve_app:${APP_DB_PASSWORD}@db:5432/labreserve?sslmode=disable"
+      LISTEN_ADDR: 0.0.0.0:8080
+      APP_ORIGIN: ${APP_ORIGIN:-http://127.0.0.1:8080}
+      APP_ENV: development
+      APP_CONTAINERIZED: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/static/style.css || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  migrate:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: labreserve-app:dev
+    command: ["migrate"]
+    environment:
+      MIGRATION_DATABASE_URL: "postgres://labreserve_migrator:${MIGRATION_DB_PASSWORD}@db:5432/labreserve?sslmode=disable"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  seed:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: labreserve-app:dev
+    command: ["seed"]
+    environment:
+      MIGRATION_DATABASE_URL: "postgres://labreserve_migrator:${MIGRATION_DB_PASSWORD}@db:5432/labreserve?sslmode=disable"
+      SEED_ALEX_PASSWORD: ${SEED_ALEX_PASSWORD:?set SEED_ALEX_PASSWORD in .env}
+      SEED_SAM_PASSWORD: ${SEED_SAM_PASSWORD:?set SEED_SAM_PASSWORD in .env}
+      SEED_JORDAN_PASSWORD: ${SEED_JORDAN_PASSWORD:?set SEED_JORDAN_PASSWORD in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  verify-db:
+    profiles: ["verify"]
+    image: postgres:17.7-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?copy .env.example to .env first}
+      POSTGRES_DB: labreserve_test
+      MIGRATION_DB_PASSWORD: ${MIGRATION_DB_PASSWORD:?set MIGRATION_DB_PASSWORD in .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}
+    command: ["postgres", "-c", "timezone=UTC"]
+    volumes:
+      - verify-data:/var/lib/postgresql/data
+      - ./deploy/postgres/01-roles.sql:/docker-entrypoint-initdb.d/01-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d labreserve_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: "no"
+
+  verify-migrate:
+    profiles: ["verify"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: labreserve-app:verify
+    command: ["migrate"]
+    environment:
+      MIGRATION_DATABASE_URL: "postgres://labreserve_migrator:${MIGRATION_DB_PASSWORD}@verify-db:5432/labreserve_test?sslmode=disable"
+    depends_on:
+      verify-db:
+        condition: service_healthy
+
+  verify-seed:
+    profiles: ["verify"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: labreserve-app:verify
+    command: ["seed"]
+    environment:
+      MIGRATION_DATABASE_URL: "postgres://labreserve_migrator:${MIGRATION_DB_PASSWORD}@verify-db:5432/labreserve_test?sslmode=disable"
+      SEED_ALEX_PASSWORD: ${SEED_ALEX_PASSWORD:?set SEED_ALEX_PASSWORD in .env}
+      SEED_SAM_PASSWORD: ${SEED_SAM_PASSWORD:?set SEED_SAM_PASSWORD in .env}
+      SEED_JORDAN_PASSWORD: ${SEED_JORDAN_PASSWORD:?set SEED_JORDAN_PASSWORD in .env}
+    depends_on:
+      verify-db:
+        condition: service_healthy
+
+  verify-go:
+    profiles: ["verify"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build
+    image: labreserve-go-tests:verify
+    working_dir: /src
+    command: ["go", "test", "-p", "1", "./..."]
+    environment:
+      LABRESERVE_TEST_DATABASE_URL: "postgres://labreserve_migrator:${MIGRATION_DB_PASSWORD}@verify-db:5432/labreserve_test?sslmode=disable"
+      LABRESERVE_TEST_APP_DATABASE_URL: "postgres://labreserve_app:${APP_DB_PASSWORD}@verify-db:5432/labreserve_test?sslmode=disable"
+      SEED_ALEX_PASSWORD: ${SEED_ALEX_PASSWORD:?set SEED_ALEX_PASSWORD in .env}
+      SEED_SAM_PASSWORD: ${SEED_SAM_PASSWORD:?set SEED_SAM_PASSWORD in .env}
+      SEED_JORDAN_PASSWORD: ${SEED_JORDAN_PASSWORD:?set SEED_JORDAN_PASSWORD in .env}
+    depends_on:
+      verify-db:
+        condition: service_healthy
+
+  verify-app:
+    profiles: ["verify"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: labreserve-app:verify
+    command: ["serve"]
+    environment:
+      DATABASE_URL: "postgres://labreserve_app:${APP_DB_PASSWORD}@verify-db:5432/labreserve_test?sslmode=disable"
+      LISTEN_ADDR: 0.0.0.0:8080
+      APP_ORIGIN: http://verify-app:8080
+      APP_ENV: development
+      APP_CONTAINERIZED: "true"
+    depends_on:
+      verify-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/static/style.css || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 5s
+    restart: "no"
+
+  e2e:
+    profiles: ["verify"]
+    build:
+      context: .
+      dockerfile: Dockerfile.e2e
+    image: labreserve-e2e:verify
+    environment:
+      PLAYWRIGHT_BASE_URL: http://verify-app:8080
+      SEED_ALEX_PASSWORD: ${SEED_ALEX_PASSWORD:?set SEED_ALEX_PASSWORD in .env}
+      SEED_SAM_PASSWORD: ${SEED_SAM_PASSWORD:?set SEED_SAM_PASSWORD in .env}
+      SEED_JORDAN_PASSWORD: ${SEED_JORDAN_PASSWORD:?set SEED_JORDAN_PASSWORD in .env}
+    depends_on:
+      verify-app:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres-data:
+  verify-data:
