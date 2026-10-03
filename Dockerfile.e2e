@@ -1,0 +1,8 @@
+FROM mcr.microsoft.com/playwright:v1.63.0-noble
+
+WORKDIR /tests
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+COPY tests/e2e/package.json tests/e2e/package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY tests/e2e/ ./
+CMD ["npm", "test"]

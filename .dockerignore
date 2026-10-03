@@ -1,0 +1,6 @@
+.git
+.env
+.agents
+**/node_modules
+coverage.*
+*.test

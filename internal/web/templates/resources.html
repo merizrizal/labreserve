@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "header" .}}
+<main>
+  <h1>Resources</h1>
+  <p>Browse a resource to see its schedule.</p>
+  {{if .Resources}}
+  <ul class="resource-list">
+    {{range .Resources}}
+    <li>
+      <h2><a href="/resources/{{.ID}}">{{.Code}} — {{.Name}}</a></h2>
+      <p class="state {{if .Active}}active{{else}}inactive{{end}}">{{if .Active}}Active{{else}}Inactive{{end}}</p>
+      <p>{{.Description}}</p>
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="notice">No resources are currently available.</p>
+  {{end}}
+</main>
+{{template "footer" .}}
