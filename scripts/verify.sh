@@ -29,7 +29,7 @@ compose run --rm verify-seed
 
 assert_seed_state() {
   state=$(compose exec -T verify-db psql -X -qAt -U postgres -d labreserve_test -c "SELECT (SELECT count(*) FROM accounts WHERE login IN ('alex@example.test', 'sam@example.test', 'jordan@example.test'))::text || '|' || (SELECT count(*) FROM resources WHERE lower(code) IN ('net-01', 'k8s-01', 'demo-01'))::text || '|' || (SELECT count(*) FROM sessions)::text || '|' || (SELECT count(*) FROM schema_migrations)::text")
-  if [ "$state" != "3|3|0|1" ]; then
+  if [ "$state" != "3|3|0|2" ]; then
     printf 'Unexpected seeded database state: %s\n' "$state" >&2
     return 1
   fi
@@ -73,9 +73,9 @@ compose up --wait -d verify-db
 compose restart verify-app
 compose up --wait -d verify-app
 state=$(compose exec -T verify-db psql -X -qAt -U postgres -d labreserve_test -c "SELECT (SELECT count(*) FROM accounts WHERE login IN ('alex@example.test', 'sam@example.test', 'jordan@example.test'))::text || '|' || (SELECT count(*) FROM resources WHERE lower(code) IN ('net-01', 'k8s-01', 'demo-01'))::text || '|' || (SELECT count(*) FROM sessions)::text || '|' || (SELECT count(*) FROM schema_migrations)::text")
-expected_state="3|3|$sessions_before|1"
+expected_state="3|3|$sessions_before|2"
 if [ "$state" != "$expected_state" ]; then
   printf 'Application/database restart changed retained state: %s (expected %s)\n' "$state" "$expected_state" >&2
   exit 1
 fi
-printf '%s\n' 'Delivery 1 verification passed.'
+printf '%s\n' 'Repository verification passed.'
