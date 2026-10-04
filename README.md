@@ -1,6 +1,6 @@
 # LabReserve
 
-LabReserve is a local, server-rendered Go proof of concept for a shared engineering resource catalog. **This delivery is foundation-only:** sign in/out, role-aware authenticated access, resource browsing, and an empty schedule. It does not create bookings or implement resource management, cancellation, or activity-history screens.
+LabReserve is a local, server-rendered Go proof of concept for a shared engineering resource catalog. **Current scope includes the Delivery 1 foundation and Task 2A persistence:** sign in/out, role-aware authenticated access, resource browsing, an empty schedule, and database-backed booking/activity-event persistence with booking invariants. Booking creation is not available to users; resource management, cancellation workflows, and activity-history screens are not implemented.
 
 ## Requirements
 
@@ -42,7 +42,7 @@ Passwords are hashed with Argon2id before storage and are never logged. Seeding 
 4. Sign out, then sign in as Jordan and confirm the coordinator role is shown. Resource reading is available to both roles; coordinator-only management/history features are intentionally not part of this delivery.
 5. In another terminal, run `make restart`. Refresh the browser: the database-backed session and seeded data survive both container restarts.
 
-There is no booking form in this delivery, so no booking or activity-event data is created. The approved bootstrap policy is implemented: initial seed accounts/resources do not generate product activity events, and no speculative activity table is created.
+There is no booking form or creation service, so the demo flow creates no bookings or activity-event records and every schedule remains empty. Task 2A adds booking and activity-event persistence for future booking creation. The approved bootstrap policy is implemented: initial seed accounts/resources do not generate product activity events.
 
 ## Local lifecycle and data safety
 
@@ -69,11 +69,11 @@ make verify
 
 It creates a separate `labreserve-verify` Compose project and disposable PostgreSQL volume, applies migrations, seeds, restarts PostgreSQL and checks retained foundation data, runs Go unit/real-PostgreSQL integration tests using separate migration/runtime roles, starts the application with the runtime role, and runs pinned Chromium/Playwright tests in `America/New_York`. After browser tests it restarts both PostgreSQL and the app and verifies seeded data and server-side sessions remain. The script removes only its own verification containers, network, and volume on exit; it does not reset the demo database.
 
-The suite verifies successful/failed login, unauthenticated route protection, server-derived role/identity despite request parameters, session rotation/revocation and persistence across an application restart, CSRF and origin rejection, seed repeatability/non-overwrite, PostgreSQL case-insensitive uniqueness, resource list/detail and empty schedule rendering, escaped HTML-like resource content, absence of speculative activity schema, database role privileges, and persistence through database restarts. The browser suite exercises the visible login, resource, schedule, and logout flow.
+Foundation coverage includes successful/failed login, unauthenticated route protection, server-derived role/identity despite request parameters, session rotation/revocation and persistence across an application restart, CSRF and origin rejection, seed repeatability/non-overwrite, PostgreSQL case-insensitive resource uniqueness, resource list/detail and empty schedule rendering, escaped HTML-like resource content, database role privileges, and persistence through database restarts. Task 2A real-PostgreSQL integration tests cover booking persistence, foreign keys, owner/request uniqueness, static Booking invariants, activity-event target constraints, and PostgreSQL exclusion-based overlap enforcement—including direct concurrent conflicting inserts on independent connections and preservation of existing foundation rows during migration. The browser suite exercises the visible login, resource, empty-schedule, and logout flow; it does not exercise booking workflows.
 
 The first `make verify` downloads the pinned Playwright browser image, which is large; later runs use the local image cache. A port conflict on the demo PostgreSQL port (default 54329) prevents demo startup; the verification database is private to its Compose network.
 
-## Delivery-time implementation defaults
+## Implementation defaults
 
 - Go 1.26.0; PostgreSQL 17.7; `pgx` 5.7.6; Playwright 1.63.0/Chromium.
 - Argon2id with 64 MiB memory, three iterations, one lane, and a random 16-byte salt.
@@ -81,10 +81,12 @@ The first `make verify` downloads the pinned Playwright browser image, which is 
 - Embedded, numbered SQL migrations with transactional checksums and a single-runner advisory lock.
 - UUID record IDs and a functional case-insensitive resource-code index.
 - Login path `/login`, logout via CSRF-protected POST `/logout`, resource list `/resources`, and resource schedule `/resources/{id}`.
-- Schedule date defaults to the current date in Asia/Jakarta. With no booking schema in Delivery 1, every valid date has the explicit empty state.
+- Schedule date defaults to the current date in Asia/Jakarta. The schedule remains explicitly empty because Task 2A adds persistence but no booking-creation or schedule-population path.
 
-These are implementation choices within the approved Delivery 1 architecture. The PRD and approved architecture are unchanged. The next delivery (booking creation) is not started here.
+These defaults describe the current implementation and do not expand product scope. The PRD and approved architecture are unchanged. Task 2A adds persistence only; booking creation remains deferred.
 
-## Scope limitations
+## Current scope and deferred work
 
-No booking creation, booking/activity tables, request replay, overlap enforcement, cancellation, My Bookings, coordinator resource mutations, activity UI, external authentication, Redis, infrastructure access, or production deployment are included. Local demo credentials are intentionally fictional and **not suitable for any non-demo environment**.
+Task 2A provides booking persistence; database-enforced `(owner_account_id, request_id)` uniqueness; static Booking invariants; PostgreSQL exclusion-based overlap enforcement for confirmed bookings; activity-event persistence required for future booking creation; and real-PostgreSQL verification of these persistence guarantees. These are persistence and database guarantees only; booking creation is not available through the application.
+
+Still deferred are the booking application service/use case, request replay/idempotency behavior, Account → Resource application locking, current-time booking validation, booking HTTP/forms, populated schedules, cancellation workflow, My Bookings, coordinator resource mutations, and activity-history UI. External authentication, Redis, infrastructure access, and production deployment are also out of scope. Local demo credentials are intentionally fictional and **not suitable for any non-demo environment**.

@@ -110,13 +110,41 @@ func TestFoundationMigrationSeedAndPrivileges(t *testing.T) {
 	`).Scan(&activityTablePresent); err != nil {
 		t.Fatal(err)
 	}
-	if activityTablePresent {
-		t.Fatal("foundation must not create speculative activity-event schema")
+	if !activityTablePresent {
+		t.Fatal("booking migration did not create activity-event persistence")
+	}
+	var activityCount int
+	if err := migrationPool.QueryRow(ctx, "SELECT count(*) FROM activity_events").Scan(&activityCount); err != nil {
+		t.Fatal(err)
+	}
+	if activityCount != 0 {
+		t.Fatalf("foundation seeding created %d product activity events, want none", activityCount)
 	}
 
 	runtimePool := testPool(t, "LABRESERVE_TEST_APP_DATABASE_URL")
 	if err := CheckSchema(ctx, runtimePool); err != nil {
 		t.Fatalf("runtime role cannot read schema ledger: %v", err)
+	}
+	var canReadBookings, canInsertBookings, canReadEvents, canInsertEvents bool
+	if err := runtimePool.QueryRow(ctx, `
+		SELECT has_table_privilege(current_user, 'bookings', 'SELECT'),
+		       has_table_privilege(current_user, 'bookings', 'INSERT'),
+		       has_table_privilege(current_user, 'activity_events', 'SELECT'),
+		       has_table_privilege(current_user, 'activity_events', 'INSERT')
+	`).Scan(&canReadBookings, &canInsertBookings, &canReadEvents, &canInsertEvents); err != nil {
+		t.Fatal(err)
+	}
+	if !canReadBookings || !canInsertBookings || !canReadEvents || !canInsertEvents {
+		t.Fatalf("runtime booking/activity privileges: bookings=%v/%v events=%v/%v", canReadBookings, canInsertBookings, canReadEvents, canInsertEvents)
+	}
+	if _, err := runtimePool.Exec(ctx, "UPDATE bookings SET purpose = purpose"); err == nil {
+		t.Fatal("runtime role unexpectedly has booking update permission")
+	}
+	if _, err := runtimePool.Exec(ctx, "UPDATE activity_events SET action = action"); err == nil {
+		t.Fatal("runtime role unexpectedly has activity-event update permission")
+	}
+	if _, err := runtimePool.Exec(ctx, "DELETE FROM activity_events"); err == nil {
+		t.Fatal("runtime role unexpectedly has activity-event delete permission")
 	}
 	if _, err := runtimePool.Exec(ctx, "UPDATE resources SET active = active"); err == nil {
 		t.Fatal("runtime role unexpectedly has resource mutation permission")
