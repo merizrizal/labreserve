@@ -1,6 +1,6 @@
 # LabReserve
 
-LabReserve is a local, server-rendered Go proof of concept for a shared engineering resource catalog. **Current scope includes the Delivery 1 foundation and Task 2A persistence:** sign in/out, role-aware authenticated access, resource browsing, an empty schedule, and database-backed booking/activity-event persistence with booking invariants. Booking creation is not available to users; resource management, cancellation workflows, and activity-history screens are not implemented.
+LabReserve is a local, server-rendered Go proof of concept for a shared engineering resource catalog. **Current scope includes the Delivery 1 foundation, Task 2A persistence, and the Task 2B internal booking creation service:** sign in/out, role-aware authenticated access, resource browsing, an empty schedule, and database-backed booking/activity-event persistence with booking invariants. The booking service is not exposed through browser workflows; resource management, cancellation workflows, and activity-history screens are not implemented.
 
 ## Requirements
 
@@ -42,7 +42,7 @@ Passwords are hashed with Argon2id before storage and are never logged. Seeding 
 4. Sign out, then sign in as Jordan and confirm the coordinator role is shown. Resource reading is available to both roles; coordinator-only management/history features are intentionally not part of this delivery.
 5. In another terminal, run `make restart`. Refresh the browser: the database-backed session and seeded data survive both container restarts.
 
-There is no booking form or creation service, so the demo flow creates no bookings or activity-event records and every schedule remains empty. Task 2A adds booking and activity-event persistence for future booking creation. The approved bootstrap policy is implemented: initial seed accounts/resources do not generate product activity events.
+There are no booking HTTP routes or forms, so the demo flow creates no bookings or activity-event records and every schedule remains empty. Task 2A provides booking and activity-event persistence; Task 2B adds an internal booking creation service, but it is not available through the browser. The approved bootstrap policy is implemented: initial seed accounts/resources do not generate product activity events.
 
 ## Local lifecycle and data safety
 
@@ -81,12 +81,14 @@ The first `make verify` downloads the pinned Playwright browser image, which is 
 - Embedded, numbered SQL migrations with transactional checksums and a single-runner advisory lock.
 - UUID record IDs and a functional case-insensitive resource-code index.
 - Login path `/login`, logout via CSRF-protected POST `/logout`, resource list `/resources`, and resource schedule `/resources/{id}`.
-- Schedule date defaults to the current date in Asia/Jakarta. The schedule remains explicitly empty because Task 2A adds persistence but no booking-creation or schedule-population path.
+- Schedule date defaults to the current date in Asia/Jakarta. The browser schedule remains explicitly empty: Task 2A provides persistence and Task 2B provides internal booking creation, but populated schedules are deferred.
 
-These defaults describe the current implementation and do not expand product scope. The PRD and approved architecture are unchanged. Task 2A adds persistence only; booking creation remains deferred.
+These defaults describe the current implementation and do not expand product scope. The PRD and approved architecture are unchanged. Task 2A implements persistence/database invariants; Task 2B implements the internal booking creation service. Booking HTTP routes/forms and the browser booking workflow remain deferred.
 
 ## Current scope and deferred work
 
-Task 2A provides booking persistence; database-enforced `(owner_account_id, request_id)` uniqueness; static Booking invariants; PostgreSQL exclusion-based overlap enforcement for confirmed bookings; activity-event persistence required for future booking creation; and real-PostgreSQL verification of these persistence guarantees. These are persistence and database guarantees only; booking creation is not available through the application.
+**Implemented — Task 2A persistence/database invariants:** booking and activity-event persistence; database-enforced `(owner_account_id, request_id)` uniqueness; static Booking invariants; PostgreSQL exclusion-based overlap enforcement for confirmed bookings; and real-PostgreSQL verification of these persistence guarantees.
 
-Still deferred are the booking application service/use case, request replay/idempotency behavior, Account → Resource application locking, current-time booking validation, booking HTTP/forms, populated schedules, cancellation workflow, My Bookings, coordinator resource mutations, and activity-history UI. External authentication, Redis, infrastructure access, and production deployment are also out of scope. Local demo credentials are intentionally fictional and **not suitable for any non-demo environment**.
+**Implemented — Task 2B internal booking creation service:** canonical request handling; authoritative-time validation; Account serialization; post-lock replay lookup; Resource locking; idempotent replay; changed-request reuse detection; overlap conflict mapping; and atomic Booking + Activity creation. This service is internal and is not exposed through browser routes or forms.
+
+**Still deferred:** booking HTTP routes/forms; browser request-id handling; populated schedules; My Bookings; cancellation workflows; resource management workflows; and activity-history UI. External authentication, Redis, infrastructure access, and production deployment are also out of scope. Local demo credentials are intentionally fictional and **not suitable for any non-demo environment**.
