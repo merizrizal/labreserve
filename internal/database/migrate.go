@@ -18,7 +18,7 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-const requiredSchemaVersion = "002_booking_persistence.sql"
+const requiredSchemaVersion = "003_booking_creation_locks.sql"
 const migrationLockID int64 = 0x4c61625265736572
 
 type migrationChecksum struct {
