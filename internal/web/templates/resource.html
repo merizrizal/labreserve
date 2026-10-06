@@ -16,8 +16,34 @@
       <input id="date" name="date" type="date" value="{{.Date}}" required>
       <button type="submit">View date</button>
     </form>
+    {{if .Resource.Active}}<p><a class="button-link" href="/resources/{{.Resource.ID}}/bookings/new">Book this resource</a></p>{{end}}
     <h3>Schedule for <time>{{.Date}} (Asia/Jakarta)</time></h3>
+    <p>Booking times are shown in Asia/Jakarta. Bookings intersecting this date are listed in start-time and Booking-ID order.</p>
+    {{if .HasSchedule}}
+    <ol class="booking-list">
+      {{range .Schedule}}
+      <li class="booking-row {{.StatusClass}}">
+        <h4><a href="/bookings/{{.ID}}">Booking {{.ID}}</a></h4>
+        <p>Owner: <strong>{{.OwnerDisplayName}}</strong></p>
+        <p>Start and end (Asia/Jakarta): <time datetime="{{.StartInstant}}">{{.StartDisplay}}</time> – <time datetime="{{.EndInstant}}">{{.EndDisplay}}</time></p>
+        <p>Purpose: {{.Purpose}}</p>
+        <p>Status: <span class="state {{.StatusClass}}">{{.Status}}</span></p>
+        {{if .Cancelled}}<p class="notice">Cancelled bookings do not occupy the resource.</p>{{end}}
+      </li>
+      {{end}}
+    </ol>
+    {{else if gt .Page 1}}
+    <p class="notice">No bookings appear on this page. Return to an earlier page or choose another date.</p>
+    {{else}}
     <p class="notice" id="empty-schedule">No bookings are scheduled for this date.</p>
+    {{end}}
+    {{if or .HasPreviousPage .HasNextPage}}
+    <nav class="pagination" aria-label="Booking schedule pages">
+      {{if .HasPreviousPage}}<a href="/resources/{{.Resource.ID}}?date={{.Date}}&amp;page={{.PreviousPage}}">Previous page</a>{{end}}
+      <span>Page {{.Page}}</span>
+      {{if .HasNextPage}}<a href="/resources/{{.Resource.ID}}?date={{.Date}}&amp;page={{.NextPage}}">Next page</a>{{end}}
+    </nav>
+    {{end}}
   </section>
 </main>
 {{template "footer" .}}

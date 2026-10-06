@@ -1,6 +1,6 @@
 # LabReserve
 
-LabReserve is a local, server-rendered Go proof of concept for a shared engineering resource catalog. **Current scope includes the Delivery 1 foundation, Task 2A persistence, and the Task 2B internal booking creation service:** sign in/out, role-aware authenticated access, resource browsing, an empty schedule, and database-backed booking/activity-event persistence with booking invariants. The booking service is not exposed through browser workflows; resource management, cancellation workflows, and activity-history screens are not implemented.
+LabReserve is a local, server-rendered Go proof of concept for a shared engineering resource catalog. **Current scope includes the Delivery 1 foundation and Tasks 2A–2C:** sign in/out, role-aware authenticated access, resource browsing and schedules, browser booking creation through the Task 2B service, and database-backed booking/activity-event persistence with booking invariants. My Bookings, cancellation, resource management, and activity-history screens are not implemented.
 
 ## Requirements
 
@@ -38,11 +38,12 @@ Passwords are hashed with Argon2id before storage and are never logged. Seeding 
 
 1. Sign in as Alex and confirm the page identifies the account as an engineer.
 2. Browse the three seeded resources: `NET-01`, `K8S-01`, and `DEMO-01`.
-3. Open a resource, choose a date, and confirm the labelled **Asia/Jakarta** schedule is empty.
-4. Sign out, then sign in as Jordan and confirm the coordinator role is shown. Resource reading is available to both roles; coordinator-only management/history features are intentionally not part of this delivery.
-5. In another terminal, run `make restart`. Refresh the browser: the database-backed session and seeded data survive both container restarts.
+3. Open a resource and choose a date. The schedule shows retained bookings intersecting that **Asia/Jakarta** date, ordered by start time and Booking ID, 25 per page.
+4. Open **Book this resource**, enter a future Asia/Jakarta start/end time and purpose, and submit. The resulting Booking page displays its stable identifier; returning to the schedule shows its owner, complete interval, purpose, and derived status.
+5. Sign out, then sign in as Jordan and confirm the coordinator role is shown. Resource reading and schedules are available to both roles; management, cancellation, My Bookings, and history features are not implemented.
+6. In another terminal, run `make restart`. Refresh the browser: the database-backed session and seeded data survive both container restarts.
 
-There are no booking HTTP routes or forms, so the demo flow creates no bookings or activity-event records and every schedule remains empty. Task 2A provides booking and activity-event persistence; Task 2B adds an internal booking creation service, but it is not available through the browser. The approved bootstrap policy is implemented: initial seed accounts/resources do not generate product activity events.
+Booking creation uses a stable hidden request identifier, server-side Asia/Jakarta parsing, CSRF and session identity, and the Task 2B service for validation, replay, locking, overlap enforcement, transactions, and activity creation. The browser adapter does not implement those booking rules itself. The approved bootstrap policy remains in place: initial seed accounts/resources do not generate product activity events.
 
 ## Local lifecycle and data safety
 
@@ -67,9 +68,9 @@ Run the repository's single verification entry point:
 make verify
 ```
 
-It creates a separate `labreserve-verify` Compose project and disposable PostgreSQL volume, applies migrations, seeds, restarts PostgreSQL and checks retained foundation data, runs Go unit/real-PostgreSQL integration tests using separate migration/runtime roles, starts the application with the runtime role, and runs pinned Chromium/Playwright tests in `America/New_York`. After browser tests it restarts both PostgreSQL and the app and verifies seeded data and server-side sessions remain. The script removes only its own verification containers, network, and volume on exit; it does not reset the demo database.
+It creates a separate `labreserve-verify` Compose project and disposable PostgreSQL volume, applies migrations, seeds, restarts PostgreSQL and checks retained foundation data, runs Go unit/real-PostgreSQL integration tests using separate migration/runtime roles, starts a verification-only Go E2E bootstrap, and runs pinned Chromium/Playwright tests in `America/New_York`. The bootstrap injects `LABRESERVE_TEST_NOW=2040-01-02T03:04:05Z`; booking dates and schedule labels are independent of wall-clock time. The production executable is unchanged and continues to use the server clock. After browser tests the script restarts both PostgreSQL and the app and verifies seeded data and server-side sessions remain. The script removes only its own verification containers, network, and volume on exit; it does not reset the demo database.
 
-Foundation coverage includes successful/failed login, unauthenticated route protection, server-derived role/identity despite request parameters, session rotation/revocation and persistence across an application restart, CSRF and origin rejection, seed repeatability/non-overwrite, PostgreSQL case-insensitive resource uniqueness, resource list/detail and empty schedule rendering, escaped HTML-like resource content, database role privileges, and persistence through database restarts. Task 2A real-PostgreSQL integration tests cover booking persistence, foreign keys, owner/request uniqueness, static Booking invariants, activity-event target constraints, and PostgreSQL exclusion-based overlap enforcement—including direct concurrent conflicting inserts on independent connections and preservation of existing foundation rows during migration. The browser suite exercises the visible login, resource, empty-schedule, and logout flow; it does not exercise booking workflows.
+Foundation coverage includes authentication, session rotation/revocation, CSRF and Origin checks, seed repeatability, resource protection/escaping, database-role privileges, and restart persistence. Task 2A/2B real-PostgreSQL tests cover booking invariants, replay, atomic activity events, locking/concurrency, and exclusion-based overlap enforcement. Task 2C Go/PostgreSQL HTTP tests assert no Booking/event mutation for rejected CSRF, malformed timestamps/IDs, Task 2B validation, unknown/inactive resources, overlap, changed request-ID reuse, and operational failure; successful Engineer and Coordinator creation, authenticated ownership, exact Jakarta instants, PRG, escaping, one creation event, replay counts, adjacency, and identical intervals on different Resources are also checked. Playwright runs in `America/New_York` with a separate Engineer B context and covers booking/replay, conflict with one visible contested record, adjacent schedule ordering, a different Resource, Coordinator self-booking, cross-midnight visibility on both Jakarta dates, escaped purpose text, and UTC `datetime` attributes matching Jakarta form values. The E2E app uses the verification-only controlled clock described above.
 
 The first `make verify` downloads the pinned Playwright browser image, which is large; later runs use the local image cache. A port conflict on the demo PostgreSQL port (default 54329) prevents demo startup; the verification database is private to its Compose network.
 
@@ -80,15 +81,18 @@ The first `make verify` downloads the pinned Playwright browser image, which is 
 - 32-byte random session and CSRF tokens; only the opaque session-token digest is stored.
 - Embedded, numbered SQL migrations with transactional checksums and a single-runner advisory lock.
 - UUID record IDs and a functional case-insensitive resource-code index.
-- Login path `/login`, logout via CSRF-protected POST `/logout`, resource list `/resources`, and resource schedule `/resources/{id}`.
-- Schedule date defaults to the current date in Asia/Jakarta. The browser schedule remains explicitly empty: Task 2A provides persistence and Task 2B provides internal booking creation, but populated schedules are deferred.
+- Login path `/login`, logout via CSRF-protected POST `/logout`, resource list `/resources`, resource schedule `/resources/{id}`, booking form `/resources/{id}/bookings/new`, and booking detail `/bookings/{id}`.
+- Schedule date defaults to the current date in Asia/Jakarta. Schedule records intersecting that Jakarta day are sorted by `start_at ASC, id ASC`; page navigation uses validated page numbers and a 25-record SQL limit/offset.
+- Booking forms use minute-resolution `datetime-local` values interpreted only in Asia/Jakarta. Successful submissions use POST/redirect/GET to the Booking detail page; replay is identified as an existing result rather than a second creation.
 
-These defaults describe the current implementation and do not expand product scope. The PRD and approved architecture are unchanged. Task 2A implements persistence/database invariants; Task 2B implements the internal booking creation service. Booking HTTP routes/forms and the browser booking workflow remain deferred.
+These defaults describe the current implementation and do not expand product scope. The PRD and approved architecture are unchanged. Task 2A implements persistence/database invariants; Task 2B implements the internal booking creation service; Task 2C exposes that service through the browser and populates Resource schedules.
 
 ## Current scope and deferred work
 
 **Implemented — Task 2A persistence/database invariants:** booking and activity-event persistence; database-enforced `(owner_account_id, request_id)` uniqueness; static Booking invariants; PostgreSQL exclusion-based overlap enforcement for confirmed bookings; and real-PostgreSQL verification of these persistence guarantees.
 
-**Implemented — Task 2B internal booking creation service:** canonical request handling; authoritative-time validation; Account serialization; post-lock replay lookup; Resource locking; idempotent replay; changed-request reuse detection; overlap conflict mapping; and atomic Booking + Activity creation. This service is internal and is not exposed through browser routes or forms.
+**Implemented — Task 2B internal booking creation service:** canonical request handling; authoritative-time validation; Account serialization; post-lock replay lookup; Resource locking; idempotent replay; changed-request reuse detection; overlap conflict mapping; and atomic Booking + Activity creation.
 
-**Still deferred:** booking HTTP routes/forms; browser request-id handling; populated schedules; My Bookings; cancellation workflows; resource management workflows; and activity-history UI. External authentication, Redis, infrastructure access, and production deployment are also out of scope. Local demo credentials are intentionally fictional and **not suitable for any non-demo environment**.
+**Implemented — Task 2C browser workflow:** authenticated CSRF-protected booking form; fresh stable request IDs; Jakarta-local transport parsing; service-outcome mapping; PRG booking detail; retained schedule display with derived states and stable 25-record pages; and cross-midnight Jakarta-day filtering.
+
+**Still deferred:** My Bookings; cancellation workflows; resource management workflows; and activity-history UI. External authentication, Redis, infrastructure access, and production deployment are also out of scope. Local demo credentials are intentionally fictional and **not suitable for any non-demo environment**.

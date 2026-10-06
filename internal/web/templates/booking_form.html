@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "header" .}}
+<main class="narrow">
+  <p><a href="/resources/{{.Resource.ID}}">← {{.Resource.Code}} schedule</a></p>
+  <h1>Book {{.Resource.Code}} — {{.Resource.Name}}</h1>
+  <p>Booking times are entered in Asia/Jakarta.</p>
+  {{if not .Resource.Active}}<p class="notice">This resource is inactive and cannot currently be booked.</p>{{end}}
+  {{if .Error}}<p class="notice error" role="alert">{{.Error}}</p>{{end}}
+  <form action="/resources/{{.Resource.ID}}/bookings" method="post" class="stack">
+    <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+    <input type="hidden" name="request_id" value="{{.BookingForm.RequestID}}">
+    <label for="start-jakarta">Start time (Asia/Jakarta)</label>
+    <input id="start-jakarta" name="start_jakarta" type="datetime-local" step="60" value="{{.BookingForm.StartAt}}" required>
+    <label for="end-jakarta">End time (Asia/Jakarta)</label>
+    <input id="end-jakarta" name="end_jakarta" type="datetime-local" step="60" value="{{.BookingForm.EndAt}}" required>
+    <label for="purpose">Purpose</label>
+    <textarea id="purpose" name="purpose" rows="4" required>{{.BookingForm.Purpose}}</textarea>
+    <button type="submit">Create booking</button>
+  </form>
+  <p>A stable request identifier is assigned to this form so a repeated submission can safely return the same booking.</p>
+</main>
+{{template "footer" .}}

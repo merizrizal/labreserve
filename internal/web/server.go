@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"labreserve.local/labreserve/internal/auth"
+	"labreserve.local/labreserve/internal/bookings"
 	"labreserve.local/labreserve/internal/config"
 	"labreserve.local/labreserve/internal/database"
 	_ "time/tzdata"
@@ -18,25 +19,37 @@ import (
 var assets embed.FS
 
 type Server struct {
-	store        *database.Store
-	auth         *auth.Service
-	templates    *template.Template
-	secureCookie bool
-	publicOrigin string
-	jakarta      *time.Location
-	now          func() time.Time
-	handler      http.Handler
+	store          *database.Store
+	auth           *auth.Service
+	bookingService *bookings.Service
+	templates      *template.Template
+	secureCookie   bool
+	publicOrigin   string
+	jakarta        *time.Location
+	now            func() time.Time
+	handler        http.Handler
 }
 
 type PageData struct {
-	Title     string
-	Error     string
-	Login     string
-	Identity  *database.Identity
-	CSRFToken string
-	Resources []database.Resource
-	Resource  database.Resource
-	Date      string
+	Title           string
+	Error           string
+	Login           string
+	Identity        *database.Identity
+	CSRFToken       string
+	Resources       []database.Resource
+	Resource        database.Resource
+	Date            string
+	Schedule        []bookingScheduleRow
+	HasSchedule     bool
+	Page            int64
+	HasPreviousPage bool
+	HasNextPage     bool
+	PreviousPage    int64
+	NextPage        int64
+	BookingForm     bookingFormValues
+	Booking         *bookingDetailView
+	BookingResult   string
+	BookingDate     string
 }
 
 func New(store *database.Store, authentication *auth.Service, cfg config.Config, now func() time.Time) (*Server, error) {
@@ -52,7 +65,7 @@ func New(store *database.Store, authentication *auth.Service, cfg config.Config,
 		return nil, fmt.Errorf("load Asia/Jakarta timezone: %w", err)
 	}
 	server := &Server{
-		store: store, auth: authentication, templates: templates,
+		store: store, auth: authentication, bookingService: bookings.NewService(store, now), templates: templates,
 		secureCookie: cfg.CookieSecure, publicOrigin: cfg.PublicOrigin,
 		jakarta: jakarta, now: now,
 	}
@@ -62,7 +75,10 @@ func New(store *database.Store, authentication *auth.Service, cfg config.Config,
 	mux.HandleFunc("POST /login", server.login)
 	mux.HandleFunc("POST /logout", server.logout)
 	mux.HandleFunc("GET /resources", server.resourceList)
+	mux.HandleFunc("GET /resources/{id}/bookings/new", server.bookingFormPage)
+	mux.HandleFunc("POST /resources/{id}/bookings", server.createBooking)
 	mux.HandleFunc("GET /resources/{id}", server.resourceDetail)
+	mux.HandleFunc("GET /bookings/{id}", server.bookingDetailPage)
 	mux.HandleFunc("GET /static/style.css", server.stylesheet)
 	server.handler = server.middleware(mux)
 	return server, nil
