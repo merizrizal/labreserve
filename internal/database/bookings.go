@@ -141,5 +141,62 @@ func (tx *bookingCreationTransaction) Rollback(ctx context.Context) error {
 	return nil
 }
 
+func (s *Store) ListResourceBookingViews(ctx context.Context, resourceID string, dayStart, dayEnd time.Time, limit, offset int64) ([]BookingView, error) {
+	if limit < 1 || offset < 0 || !dayEnd.After(dayStart) {
+		return nil, fmt.Errorf("invalid booking schedule query")
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT b.id::text, b.resource_id::text, r.code, r.name,
+		       a.id::text, a.display_name, b.start_at, b.end_at, b.purpose, b.state
+		FROM bookings b
+		JOIN resources r ON r.id = b.resource_id
+		JOIN accounts a ON a.id = b.owner_account_id
+		WHERE b.resource_id = $1 AND b.start_at < $3 AND b.end_at > $2
+		ORDER BY b.start_at ASC, b.id ASC
+		LIMIT $4 OFFSET $5`, resourceID, dayStart, dayEnd, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list resource bookings")
+	}
+	defer rows.Close()
+
+	views := make([]BookingView, 0)
+	for rows.Next() {
+		var view BookingView
+		if err := rows.Scan(
+			&view.ID, &view.ResourceID, &view.ResourceCode, &view.ResourceName,
+			&view.OwnerAccountID, &view.OwnerDisplayName, &view.StartAt, &view.EndAt,
+			&view.Purpose, &view.State,
+		); err != nil {
+			return nil, fmt.Errorf("read resource bookings")
+		}
+		views = append(views, view)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read resource bookings")
+	}
+	return views, nil
+}
+
+func (s *Store) BookingViewByID(ctx context.Context, bookingID string) (BookingView, bool, error) {
+	var view BookingView
+	err := s.pool.QueryRow(ctx, `
+		SELECT b.id::text, b.resource_id::text, r.code, r.name,
+		       a.id::text, a.display_name, b.start_at, b.end_at, b.purpose, b.state
+		FROM bookings b
+		JOIN resources r ON r.id = b.resource_id
+		JOIN accounts a ON a.id = b.owner_account_id
+		WHERE b.id = $1`, bookingID).Scan(
+		&view.ID, &view.ResourceID, &view.ResourceCode, &view.ResourceName,
+		&view.OwnerAccountID, &view.OwnerDisplayName, &view.StartAt, &view.EndAt,
+		&view.Purpose, &view.State)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return BookingView{}, false, nil
+	}
+	if err != nil {
+		return BookingView{}, false, fmt.Errorf("load booking")
+	}
+	return view, true, nil
+}
+
 var _ bookings.Repository = (*Store)(nil)
 var _ bookings.Transaction = (*bookingCreationTransaction)(nil)

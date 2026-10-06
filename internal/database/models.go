@@ -32,6 +32,19 @@ type Resource struct {
 	Active      bool
 }
 
+type BookingView struct {
+	ID               string
+	ResourceID       string
+	ResourceCode     string
+	ResourceName     string
+	OwnerAccountID   string
+	OwnerDisplayName string
+	StartAt          time.Time
+	EndAt            time.Time
+	Purpose          string
+	State            string
+}
+
 type Session struct {
 	TokenHash []byte
 	AccountID *string

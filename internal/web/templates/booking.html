@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "header" .}}
+<main class="narrow">
+  <p><a href="/resources/{{.Booking.ResourceID}}?date={{.BookingDate}}">← {{.Booking.ResourceCode}} schedule</a></p>
+  <h1>Booking details</h1>
+  {{if eq .BookingResult "created"}}<p class="notice" role="status">Booking created successfully. Booking ID: <code>{{.Booking.ID}}</code></p>{{end}}
+  {{if eq .BookingResult "replayed"}}<p class="notice" role="status">This request was already completed. Showing the existing booking, not a second creation. Booking ID: <code>{{.Booking.ID}}</code></p>{{end}}
+  <dl class="booking-detail">
+    <dt>Booking ID</dt><dd><code>{{.Booking.ID}}</code></dd>
+    <dt>Resource</dt><dd>{{.Booking.ResourceCode}} — {{.Booking.ResourceName}}</dd>
+    <dt>Owner</dt><dd>{{.Booking.OwnerDisplayName}}</dd>
+    <dt>Start (Asia/Jakarta)</dt><dd><time datetime="{{.Booking.StartInstant}}">{{.Booking.StartDisplay}}</time></dd>
+    <dt>End (Asia/Jakarta)</dt><dd><time datetime="{{.Booking.EndInstant}}">{{.Booking.EndDisplay}}</time></dd>
+    <dt>Purpose</dt><dd>{{.Booking.Purpose}}</dd>
+    <dt>Status</dt><dd><span class="state {{.Booking.StatusClass}}">{{.Booking.Status}}</span></dd>
+  </dl>
+</main>
+{{template "footer" .}}

@@ -149,14 +149,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: labreserve-app:verify
-    command: ["serve"]
+      target: verify-app
+    image: labreserve-e2e-app:verify
     environment:
       DATABASE_URL: "postgres://labreserve_app:${APP_DB_PASSWORD}@verify-db:5432/labreserve_test?sslmode=disable"
       LISTEN_ADDR: 0.0.0.0:8080
       APP_ORIGIN: http://verify-app:8080
       APP_ENV: development
       APP_CONTAINERIZED: "true"
+      LABRESERVE_TEST_NOW: "2040-01-02T03:04:05Z"
     depends_on:
       verify-db:
         condition: service_healthy
@@ -176,6 +177,8 @@ services:
     image: labreserve-e2e:verify
     environment:
       PLAYWRIGHT_BASE_URL: http://verify-app:8080
+      LABRESERVE_E2E_DATABASE_URL: "postgres://labreserve_app:${APP_DB_PASSWORD}@verify-db:5432/labreserve_test?sslmode=disable"
+      LABRESERVE_TEST_NOW: "2040-01-02T03:04:05Z"
       SEED_ALEX_PASSWORD: ${SEED_ALEX_PASSWORD:?set SEED_ALEX_PASSWORD in .env}
       SEED_SAM_PASSWORD: ${SEED_SAM_PASSWORD:?set SEED_SAM_PASSWORD in .env}
       SEED_JORDAN_PASSWORD: ${SEED_JORDAN_PASSWORD:?set SEED_JORDAN_PASSWORD in .env}
