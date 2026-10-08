@@ -1,5 +1,23 @@
 # AGENTS.md
 
+## Task preflight
+
+Before beginning an approved implementation task:
+
+1. Confirm the repository working-tree state is understood.
+2. Confirm all authoritative requirements, architecture decisions,
+   and task documents are tracked and committed.
+3. Record the implementation base revision.
+4. Read the complete task contract before editing.
+5. Confirm the task contract contains a recognizable objective,
+   scope/exclusions, verification expectations, and completion
+   criteria.
+6. If an authoritative task document appears truncated, malformed,
+   internally incomplete, or inconsistent with its referenced
+   requirements, stop and escalate before implementation.
+7. Do not begin implementation from an ambiguous or incomplete
+   specification.
+
 ## Sources of truth
 
 There are sources of truth for this project:
