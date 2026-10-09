@@ -372,8 +372,21 @@ Demonstrate Engineer A finding their booking in My Bookings, cancelling it befor
 
 Use controlled time to check labels and cancellation just before and exactly at start. Verify retained 25-record pages, cancellation/rebooking with real PostgreSQL, concurrent cancellation with exactly one event, and rollback when event recording fails. Existing booking-creation/replay guarantees must remain intact.
 
-### Boundaries and unresolved policy
+### Boundaries and policy resolution
 
 This request does not authorize early release, rescheduling, deletion, coordinator cancellation of others' bookings, resource management, or an activity-history screen. Coordinator intervention and the activity screen remain required for full v0.1, but are outside this proposed delivery. Atomic cancellation history is required even before that screen exists.
 
-The existing brief leaves one response detail unresolved: **an authorized retry of an already-cancelled booking after its former start time**. Proposed policy: return harmless success without a new mutation/event, while still enforcing ownership. Confirm this before cancellation implementation; the prohibition on cancelling a started Confirmed booking is unchanged.
+The response detail previously left unresolved—an authorized retry of an already-cancelled booking after its former start—is now approved in section 12. The prohibition on cancelling a started Confirmed booking is unchanged.
+
+## 12. Approved owner-cancellation decision
+
+The client explicitly approves these cancellation semantics and the required lock order:
+
+1. **Strict future-only transition:** An owner may cancel a Confirmed Booking only while authoritative `now < booking.start_at`. Reject when `now >= booking.start_at`, including the exact start instant.
+2. **Authorized successful no-op:** After ownership authorization, an already-Cancelled Booking returns success without mutation, even at or after its original start. A non-owner cannot use Cancelled state to bypass authorization.
+3. **Retained Booking and creation identity:** Keep the Booking in PostgreSQL with its original identifier, resource, owner, interval, purpose, creation instant, and creation request identifier. The existing Confirmed-only partial exclusion constraint releases its interval when cancellation commits; original creation replay still returns that retained Booking.
+4. **One cancellation Activity event:** Only the first Confirmed → Cancelled transition creates a cancellation event, in the same transaction as state/metadata. Authorized repeats preserve the original cancellation metadata and create no additional event. Failure to record the required event rolls back the transition and leaves the interval occupied.
+5. **Required lock order:** Resource → Booking. Re-read the Booking after acquiring the locks and use fresh authoritative server time after lock waits for a Confirmed transition. Preserve compatibility with booking creation's existing lock protocol.
+6. **Owner-only capability now:** Both engineers and coordinators may cancel their own bookings without a reason. Coordinator cancellation of another owner's Booking is deferred to a separately approved capability, which will require a reason.
+
+This approval resolves the post-start retry policy gate. It approves the decision, not application implementation or the broader proposed delivery. The transaction design and verification obligations are recorded in [architecture 002, section 4](architecture/002-my-bookings-and-cancellation.md#4-cancellation-transaction-and-lock-protocol); code changes still require a separately approved, tracked and committed task contract.

@@ -1,9 +1,9 @@
 # 002 — My Bookings and self-service cancellation
 
-- **Status:** Proposed for review; not approved for implementation.
-- **Product authority:** [Baseline section 11](../baseline.md) and [PRD](../prd.md), especially FR-008, FR-016–FR-022, FR-026–FR-027 and the proposed Delivery 3 boundary.
+- **Status:** Owner-cancellation semantics and Resource → Booking lock order approved by the client in [baseline section 12](../baseline.md#12-approved-owner-cancellation-decision). The broader Delivery 3 design remains proposed; this decision is not implementation approval.
+- **Product authority:** [Baseline sections 11–12](../baseline.md) and [PRD](../prd.md), especially FR-008, FR-016–FR-022, FR-026–FR-027 and the proposed Delivery 3 boundary.
 - **Architectural authority:** Extends [001 — Initial architecture](001-initial-architecture.md), particularly sections 4–10, without replacing its correctness or security constraints.
-- **Context:** The client reports Delivery 2 complete. My Bookings and cancellation are not yet implemented. This is a documentation-only proposal, not an implementation task contract or verification result.
+- **Context:** The client reports Delivery 2 complete, and Task 3A read-only My Bookings is present. Cancellation remains unimplemented. This documentation records the approved decision and broader design proposal, not an implementation task contract or verification result.
 
 ## 1. Scope and architectural impact
 
@@ -39,24 +39,40 @@ These are codebase observations, not claims that cancellation or its verificatio
 
 ## 4. Cancellation transaction and lock protocol
 
+### Approved owner-cancellation decision
+
+The client approves the following semantics and required locking constraint:
+
+| Decision | Required behavior |
+| --- | --- |
+| Strict future-only transition | An authenticated owner may cancel a Confirmed Booking only while authoritative `now < booking.start_at`. Reject at the exact start instant and thereafter. |
+| Authorized terminal-state no-op | Authorize ownership before inspecting Cancelled as a successful outcome. An already-Cancelled Booking succeeds without mutation, even at or after its original start; the time guard applies only to Confirmed. Non-owners cannot use this no-op. |
+| Retained identity and history | Retain the PostgreSQL Booking, original ID, resource, owner, interval, purpose, creation instant, and original creation request identifier. Creation replay remains valid. The Confirmed-only partial exclusion constraint releases the interval when cancellation commits. |
+| One cancellation event | Only the first Confirmed → Cancelled transition records a cancellation Activity event, atomically with state/metadata. An authorized repeat changes neither cancellation metadata nor history. |
+| Required lock order | Lock Resource before Booking, then re-read the authoritative Booking. Capture fresh server time after all required lock waits for a Confirmed transition. Never lock Booking first or acquire the creation Account coordination lock after Resource. |
+| Self-service boundary | Engineers and coordinators may cancel their own bookings without a reason. Coordinator cancellation of another owner's Booking, including its required reason workflow, is deferred to a separately approved capability. |
+
+This resolves the former post-start retry policy gate. It does not authorize implementation, early release, or coordinator intervention. Reason resubmission for a later cross-owner no-op remains a decision for that future capability.
+
+### Transaction protocol
+
 The service accepts the booking identifier and an actor obtained from the authenticated session. A submitted owner/account/role cannot confer authority. This delivery supports only self-service, including for coordinators; it does not exercise their later cross-owner privilege.
 
 1. Resolve the retained booking's immutable resource ID. An ordinary preliminary read may identify the resource, but cannot substitute for the locked authoritative booking read or authorize a mutation.
 2. Begin one explicit READ COMMITTED transaction and acquire the existing Resource `FOR UPDATE` lock.
 3. Lock and re-read the Booking row in a subsequent statement. Preserve Resource → Booking order; cancellation must not acquire the booking-creation Account coordination lock after Resource or reverse the resource/booking order.
 4. Check that the booking belongs to the authenticated actor, including when its state is already Cancelled. Unknown bookings and forbidden requests produce safe, distinguishable outcomes without mutations or successful-change events.
-5. For a Confirmed booking, capture fresh authoritative server time after all required locks. Require `now < start`; at or after start, reject without changing state or availability. Do not use request-arrival time or transaction-start database `now()` after a wait. No active-resource/horizon validation is needed to release an existing booking.
-6. Update only state, cancellation actor, and cancellation instant. Retain booking ID, resource, owner, request identifier, original interval/purpose, and creation instant.
-7. Append exactly one booking-cancelled event in the same transaction, identifying actor, affected booking, operation time, and relevant resource/original-interval details. No reason is required for self-service. Retain the original creation event.
-8. Commit once, then report success. A definite event/commit rejection rolls back all changes. A transport loss around commit is an unknown outcome, not proof of rollback; retry the same cancellation target and rely on its authorized state-based no-op behavior.
+5. If already Cancelled, return authorized no-op success without applying the original start-time guard, changing cancellation metadata, or appending an event. This remains successful at or after the original start.
+6. For a Confirmed booking, capture fresh authoritative server time after all required locks. Require `now < start`; at or after start, reject without changing state or availability. Do not use request-arrival time or transaction-start database `now()` after a wait. No active-resource/horizon validation is needed to release an existing booking.
+7. Update only state, cancellation actor, and cancellation instant. Retain booking ID, resource, owner, request identifier, original interval/purpose, and creation instant.
+8. Append exactly one booking-cancelled event in the same transaction, identifying actor, affected booking, operation time, and relevant resource/original-interval details. No reason is required for self-service. Retain the original creation event.
+9. Commit once, then report success. A definite event/commit rejection rolls back all changes. A transport loss around commit is an unknown outcome, not proof of rollback; retry the same cancellation target and rely on its authorized state-based no-op behavior.
 
 The existing foreign-key and lock design must remain compatible with concurrent creation. Cancellation/event insertion must not introduce a Resource → Account coordination-lock cycle; creation retains Account `FOR NO KEY UPDATE`, which remains compatible with account foreign-key `KEY SHARE` locks.
 
-### Repeated cancellation policy gate
+### Repeated and concurrent cancellation
 
-Before start, an authorized repeat against a Cancelled booking is a harmless no-op with no additional event. Concurrent authorized requests serialize on Resource/Booking; after the first transition commits, the second observes Cancelled and does not repeat it. If the first rolls back, the waiter re-evaluates the unchanged booking and fresh time.
-
-**Proposed, not yet approved:** apply that same no-op success after the booking's former start. Ownership is checked first; the start-time guard applies only to a real Confirmed → Cancelled transition. Confirm this policy before cancellation implementation. The later question about resubmitting a coordinator intervention reason is outside this self-service delivery.
+An authorized repeat against a Cancelled booking is a successful no-op regardless of its former start. Concurrent authorized requests serialize on Resource/Booking; after the first transition commits, the second observes Cancelled and does not repeat it. If the first rolls back, the waiter re-evaluates the unchanged Confirmed booking and fresh time; it may transition only if still future.
 
 ## 5. Availability, retention, and permissions
 
@@ -74,8 +90,8 @@ Cancelled and past Bookings retain their request identity until explicit reset. 
 
 | Seam | Proposed Delivery 3 evidence |
 | --- | --- |
-| Controlled-clock behavior | Labels before/exactly at start/end; Cancelled always Cancelled; cancellation just before start accepted and exactly at/after start rejected; lock wait crossing start uses fresh time. |
-| HTTP authorization/security | Anonymous access blocked; My Bookings ignores tampered owner filters on every page; cross-owner cancellation rejected for Confirmed and Cancelled rows; missing/invalid CSRF and unexpected Origin rejected with no mutation/event; GET never cancels. |
+| Controlled-clock behavior | Labels before/exactly at start/end; Cancelled always Cancelled; Confirmed cancellation one microsecond before start accepted and exactly at/after start rejected; authorized Cancelled repeats succeed before, exactly at, and after original start without metadata/event changes; lock wait crossing start uses fresh time. |
+| HTTP authorization/security | Anonymous access blocked; My Bookings ignores tampered owner filters on every page; cross-owner cancellation rejected for Confirmed and Cancelled rows, including coordinator requests through this owner-only capability; missing/invalid CSRF and unexpected Origin rejected with no mutation/event; GET never cancels. |
 | Real PostgreSQL transactions | Successful cancellation retains original fields and atomically writes metadata plus one event; event failure rolls back and keeps the interval occupied; two independent concurrent cancellations produce one transition/event; cancellation/creation lock ordering and runtime column privileges are exercised. Use deterministic lock coordination, not arbitrary sleeps. |
 | Retention and replay | Past/Cancelled own bookings remain accessible across resources; lists longer than 25 preserve documented ordering/tie-breakers and owner scope; cancellation history survives restarts; original creation request still replays the Cancelled booking without another creation/event. |
 | Browser workflow | Engineer A navigates to My Bookings, sees statuses/Jakarta times, cancels an upcoming booking, and sees retained Cancelled state. Engineer B's My Bookings excludes A's records, while B sees the released interval in the shared workflow and successfully reserves it. Include empty state, pagination, non-Jakarta browser timezone, and escaped purpose text. |
@@ -86,7 +102,7 @@ Trace new evidence to PRD AC-034–AC-040 and the existing cancellation, label, 
 ## 7. Review and implementation gates
 
 1. Review and approve the proposed Delivery 3 scope, including deferral of coordinator cross-owner cancellation and activity-history UI without removing them from v0.1.
-2. Confirm the already-cancelled retry policy after former start. This is the remaining in-scope product decision; no new time-based stored states or early-release interpretation is implied.
-3. Prepare separately approved implementation task contracts consistent with these existing architectural constraints, verification expectations, and completion criteria. This addendum does not create them or authorize code/schema/configuration changes.
+2. Apply the approved owner-cancellation decision in section 4; the post-start retry policy is resolved, not a remaining implementation gate. No new time-based stored states or early-release interpretation is implied.
+3. Use separately approved, tracked and committed implementation task contracts consistent with these architectural constraints, verification expectations, and completion criteria. This addendum does not create them or authorize code/schema/configuration changes.
 
 No approved architectural constraint needs replacement. The change extends existing queries, application-service behavior, browser adapters, and narrowly scoped runtime permissions; it does not justify redesigning booking creation or broadening the release.

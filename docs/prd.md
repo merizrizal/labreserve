@@ -8,16 +8,16 @@ The team needs an internal browser application that prevents resource conflicts,
 
 ## Source Materials
 
-- **[LabReserve v0.1 client baseline](baseline.md):** Primary source for actors, booking rules, security and local-operation constraints, acceptance scenarios, deferred change requests, and delivery boundaries. Section 11 records the post-Delivery 2 request for My Bookings and self-service cancellation.
+- **[LabReserve v0.1 client baseline](baseline.md):** Primary source for actors, booking rules, security and local-operation constraints, acceptance scenarios, deferred change requests, and delivery boundaries. Section 11 records the post-Delivery 2 request for My Bookings and self-service cancellation; section 12 records the approved owner-cancellation semantics and lock order.
 - **Repository agent instructions:** Establish this PRD as the authoritative product requirements, require one approved implementation task at a time, and require verification, escalation of genuine conflicts, and independent review in a separate agent session.
 - **[Initial architecture](architecture/001-initial-architecture.md) and Delivery 2 task contracts:** Define the existing foundations and approved booking-creation behavior. [Task 2B](tasks/002b-atomic-booking-creation.md) settles canonical request equivalence; [Task 2C](tasks/002c-booking-web-workflow.md) settles Jakarta-day schedule intersections.
-- **Current implementation and README:** The repository now contains the Go application, PostgreSQL migrations, authentication, booking creation/replay, populated schedules, and Go/HTTP/real-database/Playwright tests. My Bookings and cancellation workflows are not implemented. Delivery 2 completion is reported by the client; this documentation update does not independently certify its acceptance or re-run its verification.
-- **[Proposed Delivery 3 architecture addendum](architecture/002-my-bookings-and-cancellation.md):** Describes reuse of the existing boundaries and cancellation transaction design. It is a review proposal, not implementation approval.
+- **Current implementation and README:** The repository now contains the Go application, PostgreSQL migrations, authentication, booking creation/replay, populated schedules, and Go/HTTP/real-database/Playwright tests. Task 3A read-only My Bookings is present; cancellation remains unimplemented. Delivery 2 completion is reported by the client; this documentation update does not independently certify its acceptance or re-run its verification.
+- **[Delivery 3 architecture addendum](architecture/002-my-bookings-and-cancellation.md):** Records the approved owner-cancellation decision and Resource → Booking lock order alongside the broader proposed design. Decision approval is not implementation approval.
 - **Baseline technical references:** Playwright, Go templates, PostgreSQL ranges, and Docker Compose informed the existing architecture. Their baseline recommendation status does not replace the subsequent architecture and task decisions.
 
 ## Project Mode
 
-**Incremental delivery on an existing application.** Delivery 1 foundations and Delivery 2 booking creation/schedules are present. The latest request advances existing v0.1 booking-view and cancellation requirements; it does not expand the product into rescheduling, early release, or another stored state. Proposed Delivery 3 remains documentation-only until its scope and remaining policy are approved.
+**Incremental delivery on an existing application.** Delivery 1 foundations and Delivery 2 booking creation/schedules are present. The latest request advances existing v0.1 booking-view and cancellation requirements; it does not expand the product into rescheduling, early release, or another stored state. Owner-cancellation semantics and the lock order are approved; the broader Delivery 3 proposal does not itself authorize implementation. Each implementation task still requires separate approval and the repository's committed-task preflight.
 
 ## Solution
 
@@ -132,10 +132,10 @@ Atomic rescheduling and maintenance windows are explicitly deferred change reque
 
 ### Cancellation
 
-- **FR-019:** An engineer may cancel only their own confirmed booking and only before its start instant. A coordinator may cancel anyone's confirmed booking only before its start instant. Neither role may cancel a confirmed booking at or after start.
-- **FR-020:** A coordinator cancelling another user's booking must provide a reason. A reason is not required by the baseline when cancelling their own booking.
+- **FR-019:** An engineer may cancel only their own Confirmed booking. A coordinator's full-v0.1 capability may cancel anyone's Confirmed booking, but cross-owner intervention is deferred from the owner-only delivery. Any Confirmed → Cancelled transition requires authoritative `now < booking.start_at`; reject when `now >= booking.start_at`, including the exact start instant.
+- **FR-020:** Owner cancellation requires no reason, for either role. A coordinator cancelling another user's booking must provide a reason in that separately approved future capability.
 - **FR-021:** Successful cancellation must retain the booking record, its identifier and original request identity/data, change its stored state to Cancelled, and release its interval when the cancellation transaction commits. Record cancellation actor/time and its required activity event atomically under FR-026–FR-027. Rejected or rolled-back cancellation must leave the booking and availability unchanged; cancellation must not invalidate creation replay.
-- **FR-022:** Repeating an authorized cancellation of an already-cancelled booking must be harmless and must not create another cancellation event. Authorization must not be bypassed because the booking is already cancelled.
+- **FR-022:** After ownership authorization, an already-Cancelled booking must return successful no-op, even at or after its original start instant. Apply the time guard only to a Confirmed transition. The no-op must change neither cancellation metadata nor history; only the first transition creates a cancellation event. Cancelled state must never bypass authorization. Cross-owner coordinator retry/reason details belong to the later intervention capability.
 
 ### Resource management
 
@@ -204,7 +204,7 @@ These began as baseline recommendations and are now selected in the architecture
 | Browser UI | Server-rendered `html/template`, preserving contextual escaping |
 | Database | PostgreSQL; retained Booking request identity and activity records |
 | Overlap enforcement | Immediate partial GiST exclusion over Confirmed booking intervals |
-| Transactions | READ COMMITTED; creation Account → replay lookup → Resource; cancellation design Resource → Booking |
+| Transactions | READ COMMITTED; creation Account → replay lookup → Resource; approved cancellation Resource → Booking lock order |
 | Authentication | Opaque, revocable PostgreSQL-backed sessions; server-derived actors and CSRF protection |
 | Local environment | Docker Compose with durable local storage |
 | Verification | Go unit/HTTP tests, real-PostgreSQL integration tests, and Playwright browser tests through `make verify` |
@@ -230,7 +230,7 @@ Exact field encodings, schema layout, and identifiers are architectural decision
 - **Sign-in/sign-out:** Establish an authenticated session using seeded account credentials; invalidate it on sign-out. The browser cannot grant itself a role or identity.
 - **Browse:** Return resources and selected-resource/date schedules only to authenticated users. Return My Bookings scoped to the authenticated account. Booking list pagination must use 25-record pages and a documented stable order.
 - **Create booking:** Accept a resource identifier, start/end timestamps, purpose, and stable request identifier. Resolve owner server-side. Return the accepted booking's identifier, or return the same identifier for an identical retry. Distinguish invalid input, inactive-resource rejection, reservation conflict, and changed-data request-identifier reuse.
-- **Cancel booking:** Identify the booking, check the actor's permission, and require a reason for coordinator cancellation of someone else's future booking. A successful transition retains the record and releases availability; an authorized repeat creates no new event.
+- **Cancel booking:** For the owner-only capability, identify the booking and authorize the authenticated owner before allowing a Cancelled no-op. Otherwise require Confirmed and fresh authoritative `now < booking.start_at` after Resource → Booking locks. Owner cancellation needs no reason. A successful transition retains the Booking and creation request identifier, releases availability at commit, and atomically records one cancellation event. Authorized repeats succeed even at or after original start, with no metadata changes or new event. Coordinator cross-owner cancellation and its required reason are deferred to a separately approved capability.
 - **Manage resource:** Restrict creation, name/description changes, and activation changes to coordinators. Reject code changes and deactivation blocked by a non-cancelled booking ending in the future.
 - **Inspect history:** Restrict event access to coordinators and expose relevant actor/action/record/time/details without edit or delete actions.
 - **Errors:** Do not expose database internals. Authentication, authorization, validation, inactive-resource, conflict, and request-identity errors must be distinguishable at the appropriate UI or HTTP boundary. Exact HTTP status codes and response envelopes are deferred to architectural design.
@@ -247,7 +247,7 @@ A correct booking/deactivation race may accept the booking and reject deactivati
 - **Resource/schedule:** Show code, name, description, active state, selected date, and booking details. Use a clear empty schedule when no bookings exist and a distinct inactive indication.
 - **Booking form/detail:** Show the resource, Jakarta time context, start/end inputs, and purpose. Explain validation, inactive-resource rejection, and conflict. Show the resulting booking after acceptance or identical replay.
 - **My Bookings:** Provide a clearly labelled navigation entry for authenticated users. Show only that account's retained bookings across resources, with resource identity, full interval, purpose, and derived label. Include a useful empty state and stable 25-record pages. Offer cancellation only for the user's own Upcoming Confirmed bookings; a stale page must not bypass fresh server checks. No search, status filters, or calendar UI are required by this request.
-- **Cancellation:** Explain the future-only rule and the need for a reason when a coordinator cancels another user's booking. After success, show Cancelled and make the interval available immediately.
+- **Cancellation:** Explain the strict future-only rule for Confirmed bookings. Owner cancellation requires no reason; cross-owner coordinator cancellation and its reason form are deferred. After commit, show the retained Cancelled record and released interval. An authorized repeat remains successful even after original start, without implying another change/event.
 - **Resource management:** Provide coordinator-only create/edit/activate/deactivate actions. When deactivation is blocked, explain that upcoming bookings must be cancelled and in-use bookings must finish.
 - **Activity:** Provide coordinators a view of successful changes with actor, affected record, timestamp, and relevant details, including reasons and resource-name changes.
 - **Role-aware presentation:** Do not offer unauthorized actions to engineers, while retaining server checks for direct requests.
@@ -263,7 +263,7 @@ Reuse the existing Go booking-service tests, PostgreSQL persistence/transaction 
 2. **HTTP/handler permission tests:** Send direct unauthenticated and engineer/coordinator requests to protected operations. Verify server-derived ownership/roles, cross-user cancellation rejection, coordinator-only resources/history, session invalidation, and CSRF protection. Check both responses and absence of unauthorized mutations/success events.
 3. **Real-database integration tests:** Verify persistence, overlap enforcement, retry behavior, resource eligibility, atomic events, cancellation releasing availability, and restart durability. Use independent concurrent operations for competing bookings and booking/deactivation races; fake repositories alone are insufficient for those guarantees.
 4. **Failure-injection tests:** Make required event recording fail and verify the business mutation does not commit. Cover booking and resource changes, not only UI error presentation.
-5. **Controlled-clock boundary tests:** Verify five-minute and 30-day start boundaries, 30-minute and eight-hour durations, end-after-start, cancellation just before and exactly at start, and display labels exactly at start/end. Do not depend on dates that eventually become past.
+5. **Controlled-clock boundary tests:** Verify five-minute and 30-day start boundaries, 30-minute and eight-hour durations, end-after-start, Confirmed cancellation one microsecond before, exactly at, and after start; authorized Cancelled repeats before, exactly at, and after original start without metadata/event changes; and display labels exactly at start/end. Do not depend on dates that eventually become past.
 6. **Contract and focused rule tests:** Cover trimmed purpose lengths, all overlap shapes, adjacent intervals, cross-midnight bookings, different-resource simultaneous reservations, request-identifier scope, identical replay, changed-data reuse, and cancelled bookings excluded from conflicts. Use isolated unit tests only where they meaningfully complement higher-level evidence.
 7. **Security/content tests:** Verify HTML-like resource descriptions and purposes render as text, reject state-changing requests without required CSRF protection, and ensure authentication failures/direct requests cannot select a role. Review credential persistence and logs for plaintext passwords or session-token disclosure.
 8. **Lifecycle tests:** Verify clean startup, migrations, repeated non-destructive seeding, explicit reset, and application/database restarts. Verify retained booking/history data and retry identity across normal restarts.
@@ -284,7 +284,7 @@ The first 14 criteria preserve the baseline AC-01 through AC-14 in the same orde
 | AC-005 | Two users concurrently submit valid conflicting bookings against a healthy system using independent real-database operations; exactly one succeeds, the other receives a conflict, and only one booking is stored. |
 | AC-006 | The same user retries the same request identifier and data; the existing booking identifier is returned with no additional booking or creation event. |
 | AC-007 | An engineer directly requests cancellation of someone else's booking through HTTP; the request is rejected without changing the booking or creating a successful cancellation event. |
-| AC-008 | An authorized user cancels a future booking and repeats the cancellation; its interval is available for rebooking and exactly one cancellation event exists. |
+| AC-008 | An owner cancels a future Confirmed booking without a reason; its interval is available for rebooking. Authorized repeats before, exactly at, and after original start succeed as no-ops, preserve cancellation metadata, and leave exactly one cancellation event. |
 | AC-009 | A coordinator attempts deactivation with an upcoming or in-use non-cancelled booking; deactivation is rejected with an explanation. |
 | AC-010 | Booking creation races with deactivation using independent real-database operations; final state satisfies active-resource and deactivation rules, with no inactive resource holding a newly accepted future booking. |
 | AC-011 | The browser uses a non-Jakarta timezone; entered and displayed times represent the intended Jakarta interval and displayed booking times are visibly labelled Asia/Jakarta. |
@@ -353,7 +353,7 @@ Include:
 
 **Exclude:** coordinator cancellation of others' bookings/reason forms, resource management, activity-history UI, early release, rescheduling, deletion, and additional filters/calendar features. Coordinator intervention and activity inspection remain full-v0.1 obligations for later approved deliveries; writing the required cancellation event is not deferred.
 
-Acceptance evidence must cover AC-007–AC-008, AC-025–AC-027 for self-service, AC-034–AC-040, cancellation-specific atomicity/durability under AC-012–AC-013, and authentication/CSRF/timezone/content requirements. Existing Delivery 1/2 verification must continue to pass through `make verify`. The already-cancelled retry policy below must be confirmed before cancellation implementation; no new task contracts or application changes are authorized here.
+Acceptance evidence must cover AC-007–AC-008, AC-025–AC-027 for self-service, AC-034–AC-040, cancellation-specific atomicity/durability under AC-012–AC-013, and authentication/CSRF/timezone/content requirements. Existing Delivery 1/2 verification must continue to pass through `make verify`. The owner-cancellation decision in baseline section 12 and architecture 002 section 4 is approved, including post-start no-op success and Resource → Booking locking. This documentation approval does not authorize implementation; use a separately approved, tracked and committed task contract.
 
 Remaining v0.1 behaviors still require separately approved, reviewable tasks. This PRD does not authorize the deferred rescheduling or maintenance-window change requests.
 
@@ -367,7 +367,7 @@ No feature-flag system, production rollout, or external monitoring service is re
 
 ### Confirmed facts and boundaries
 
-- Delivery 1/2 application code, schemas, contracts, and test seams exist. My Bookings and cancellation workflows remain unimplemented; the proposed next scope is not implementation approval.
+- Delivery 1/2 application code, schemas, contracts, and test seams exist. Task 3A read-only My Bookings is present; cancellation remains unimplemented. The approved cancellation semantics do not themselves authorize the proposed next implementation scope.
 - The application history is not tamper-proof against database administrators.
 - The historical Delivery 1 boundary excluded booking creation; Delivery 2 subsequently introduced it.
 - The baseline's introductory concern about forgetting to release resources does not authorize early release; cancellation remains future-only.
@@ -376,7 +376,7 @@ No feature-flag system, production rollout, or external monitoring service is re
 
 ### Product details to resolve before affected implementation
 
-1. **Already-cancelled retry after original start — Delivery 3 policy gate:** The baseline requires harmless authorized repeated cancellation and prohibits cancelling a started Confirmed booking. **Proposed, not yet approved:** after ownership checks, an already-Cancelled booking returns no-op success even after its former start, without another mutation/event. Confirm before cancellation implementation. Whether a coordinator must resubmit a reason on a later cross-owner no-op belongs to the coordinator-intervention delivery, not this request.
+1. **Owner-cancellation policy — resolved:** Baseline section 12 approves the strict Confirmed transition boundary, authorized Cancelled no-op success even after original start, retained creation request identity, one cancellation event, Resource → Booking lock order, and deferral of coordinator intervention. Owner cancellation needs no reason. Whether a coordinator must resubmit a reason on a later cross-owner no-op remains a question for the coordinator-intervention delivery, not an owner-cancellation gate.
 2. **My Bookings ordering — implementation default:** Reuse the schedule's `start_at ASC, id ASC` and validated 25-record page-number navigation, or document another stable order with a unique tie-breaker in the approved task. Do not add status filters/search without scope approval. Ordering is not an unresolved client business rule.
 3. **Later resource/intervention text contracts:** Resource name/description limits and cancellation-reason length/whitespace handling remain matters for their affected later deliveries. Do not introduce arbitrary restrictions in self-service cancellation, which needs no reason.
 4. **Later activity presentation:** Activity ordering/pagination and coordinator-view details remain delivery-time choices. They must not delay or weaken atomic recording of the required cancellation event.
