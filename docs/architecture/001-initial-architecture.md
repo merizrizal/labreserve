@@ -3,8 +3,11 @@
 - **Status:** Approved for Delivery 1 implementation (foundation only).
 - **Decision authority:** Case-insensitive resource-code identity in section 2 and bootstrap history in section 9 are approved product decisions. Architecture approval is limited to Delivery 1; later deliveries still require separate approval. Implementation defaults are distinguished in section 15.
 - **Scope:** LabReserve v0.1 proof of concept, as defined by [the PRD](../prd.md).
-- **Context:** [Client baseline](../baseline.md). The repository currently has no application, schema, or tests to preserve.
-- **Delivery boundary:** This document designs the complete v0.1, but implementation approval covers Delivery 1 only. The first implementation delivery remains foundation-only: local startup, durable storage, migrations, safe seeds, authentication, role-aware access, resource browsing with an empty schedule, verification, and demonstration instructions. Booking creation follows in a separately approved delivery; resource management, cancellation, and completed activity views follow in further approved tasks.
+- **Initial design context:** [Client baseline](../baseline.md). This architecture was written before the application, schema, and tests existed; Delivery 1/2 foundations and booking creation/schedules are now present.
+- **Approval history:** The initial architecture approval covered Delivery 1 only. The separately approved [Task 2A](../tasks/002a-booking-persistence.md), [Task 2B](../tasks/002b-atomic-booking-creation.md), and [Task 2C](../tasks/002c-booking-web-workflow.md) supplied Delivery 2's authority. The client now reports Delivery 2 complete. Cancellation, My Bookings, resource management, and completed activity views are not implemented merely because this document designs them.
+- **Next proposed delivery:** [002 — My Bookings and self-service cancellation](002-my-bookings-and-cancellation.md) records the architectural impact of the latest request without changing this document's approved correctness constraints or authorizing implementation.
+
+**Current reading guide:** The Delivery 1 approval statements below are historical. Task 2B subsequently settled canonical request equivalence/purpose counting, and Task 2C settled Jakarta-day intersection filtering; those are no longer unresolved gates in sections 5 and 15. The already-cancelled replay policy remains proposed pending confirmation. The addendum describes the current implementation seams and proposed Delivery 3 boundary; it does not approve coordinator intervention or other deferred workflows.
 
 ## 1. Application boundaries and components
 

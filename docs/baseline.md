@@ -339,3 +339,41 @@ Both requests are substantial enough to expose architectural weaknesses, but bou
 > For every implementation task, continue through testing and in-scope repair. Escalate genuine requirement conflicts, boundary changes, or blockers rather than stopping between routine steps.
 >
 > A delivery is ready for review only when you provide the candidate revision, executed checks, observed results, and remaining limitations.
+
+---
+
+## 11. Post-Delivery 2 client request — My Bookings and self-service cancellation
+
+### Delivery context and request
+
+The client reports Delivery 2 — booking creation, populated resource schedules, and retry-safe submission — complete. The initial assignment above remains the historical Delivery 1 boundary, not the current implementation scope.
+
+> Our engineers can now create reservations, but they need a convenient place to see all their bookings.
+> I want each engineer to see their own booking history, understand which reservations are upcoming, currently in use, past, or cancelled, and cancel upcoming reservations they no longer need.
+> When a reservation is cancelled, its time interval should become available for another engineer.
+> The application must preserve historical records and prevent users from cancelling someone else's reservations.
+
+This request activates the next portion of existing v0.1 **FR-04 (View bookings)** and **FR-05 (Cancel a booking)**. It is not the deferred CR-01 rescheduling or CR-02 maintenance-window request, and it does not introduce another stored booking state.
+
+### Proposed Delivery 3 boundary
+
+The following is a documentation proposal for review, not approval to implement:
+
+- Provide an authenticated **My Bookings** view across resources, containing only the current account's bookings, including past and cancelled records. Show resource identity, full interval, purpose, and status; use the existing Jakarta time contract and 25-record pages with a documented stable order.
+- Derive Upcoming, In use, and Past from authoritative server time and the booking interval. Cancelled always displays Cancelled. Only Confirmed and Cancelled are persisted.
+- Let engineers cancel their own Confirmed bookings only while server time is strictly before start. The same self-service capability applies to coordinators for their own bookings; coordinator intervention on another account's booking remains a later delivery.
+- Retain the booking, original request identity/data, and history. Commit cancellation metadata and exactly one required cancellation activity event together. A failed required event must leave the booking Confirmed and its interval reserved.
+- Release the interval when cancellation commits. Another engineer can then book it through the existing creation workflow. A rejected or rolled-back cancellation must not release availability.
+- Enforce ownership and eligibility on the server, including direct requests and retries; state-changing browser requests retain authentication and CSRF protection. A repeated authorized cancellation must not create another event.
+
+### Acceptance emphasis
+
+Demonstrate Engineer A finding their booking in My Bookings, cancelling it before start, and still seeing the retained Cancelled record. Engineer B can then reserve that interval. Engineer B must not see A's booking in their own My Bookings or cancel A's booking through a direct request. Shared resource schedules remain visible to all authenticated users under the original visibility policy.
+
+Use controlled time to check labels and cancellation just before and exactly at start. Verify retained 25-record pages, cancellation/rebooking with real PostgreSQL, concurrent cancellation with exactly one event, and rollback when event recording fails. Existing booking-creation/replay guarantees must remain intact.
+
+### Boundaries and unresolved policy
+
+This request does not authorize early release, rescheduling, deletion, coordinator cancellation of others' bookings, resource management, or an activity-history screen. Coordinator intervention and the activity screen remain required for full v0.1, but are outside this proposed delivery. Atomic cancellation history is required even before that screen exists.
+
+The existing brief leaves one response detail unresolved: **an authorized retry of an already-cancelled booking after its former start time**. Proposed policy: return harmless success without a new mutation/event, while still enforcing ownership. Confirm this before cancellation implementation; the prohibition on cancelling a started Confirmed booking is unchanged.
