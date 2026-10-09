@@ -177,6 +177,42 @@ func (s *Store) ListResourceBookingViews(ctx context.Context, resourceID string,
 	return views, nil
 }
 
+func (s *Store) ListMyBookingViews(ctx context.Context, ownerID string, limit, offset int64) ([]BookingView, error) {
+	if limit < 1 || offset < 0 {
+		return nil, fmt.Errorf("invalid my bookings query")
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT b.id::text, b.resource_id::text, r.code, r.name,
+		       a.id::text, a.display_name, b.start_at, b.end_at, b.purpose, b.state
+		FROM bookings b
+		JOIN resources r ON r.id = b.resource_id
+		JOIN accounts a ON a.id = b.owner_account_id
+		WHERE b.owner_account_id = $1
+		ORDER BY b.start_at ASC, b.id ASC
+		LIMIT $2 OFFSET $3`, ownerID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list my bookings")
+	}
+	defer rows.Close()
+
+	views := make([]BookingView, 0)
+	for rows.Next() {
+		var view BookingView
+		if err := rows.Scan(
+			&view.ID, &view.ResourceID, &view.ResourceCode, &view.ResourceName,
+			&view.OwnerAccountID, &view.OwnerDisplayName, &view.StartAt, &view.EndAt,
+			&view.Purpose, &view.State,
+		); err != nil {
+			return nil, fmt.Errorf("read my bookings")
+		}
+		views = append(views, view)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read my bookings")
+	}
+	return views, nil
+}
+
 func (s *Store) BookingViewByID(ctx context.Context, bookingID string) (BookingView, bool, error) {
 	var view BookingView
 	err := s.pool.QueryRow(ctx, `

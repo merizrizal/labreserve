@@ -262,6 +262,37 @@ func singlePostValue(r *http.Request, name string) (string, bool) {
 	return values[0], true
 }
 
+func (s *Server) myBookings(w http.ResponseWriter, r *http.Request) {
+	if !s.requireIdentity(w, r) {
+		return
+	}
+	state, _ := requestStateFrom(r)
+	identity := state.session.Identity
+	page, offset, validPage := bookingPageOffset(r.URL.Query())
+	if !validPage {
+		http.Error(w, "Choose a valid bookings page.", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	now := s.now()
+	views, err := s.store.ListMyBookingViews(ctx, identity.ID, bookingQueryPageLimit, offset)
+	if err != nil {
+		http.Error(w, "Your bookings are temporarily unavailable.", http.StatusServiceUnavailable)
+		return
+	}
+	hasNext := int64(len(views)) > bookingPageSize
+	if hasNext {
+		views = views[:bookingPageSize]
+	}
+	rows := myBookingRows(views, now, s.jakarta)
+	s.render(w, r, "my_bookings.html", http.StatusOK, PageData{
+		Title: "My Bookings", MyBookings: rows, HasMyBookings: len(rows) != 0,
+		Page: page, HasPreviousPage: page > 1, HasNextPage: hasNext,
+		PreviousPage: page - 1, NextPage: page + 1,
+	})
+}
+
 func (s *Server) bookingDetailPage(w http.ResponseWriter, r *http.Request) {
 	if !s.requireIdentity(w, r) {
 		return

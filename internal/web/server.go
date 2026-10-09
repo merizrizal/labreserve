@@ -41,6 +41,8 @@ type PageData struct {
 	Date            string
 	Schedule        []bookingScheduleRow
 	HasSchedule     bool
+	MyBookings      []myBookingRow
+	HasMyBookings   bool
 	Page            int64
 	HasPreviousPage bool
 	HasNextPage     bool
@@ -75,6 +77,7 @@ func New(store *database.Store, authentication *auth.Service, cfg config.Config,
 	mux.HandleFunc("POST /login", server.login)
 	mux.HandleFunc("POST /logout", server.logout)
 	mux.HandleFunc("GET /resources", server.resourceList)
+	mux.HandleFunc("GET /my-bookings", server.myBookings)
 	mux.HandleFunc("GET /resources/{id}/bookings/new", server.bookingFormPage)
 	mux.HandleFunc("POST /resources/{id}/bookings", server.createBooking)
 	mux.HandleFunc("GET /resources/{id}", server.resourceDetail)

@@ -38,6 +38,19 @@ type bookingScheduleRow struct {
 	Cancelled        bool
 }
 
+type myBookingRow struct {
+	ID           string
+	ResourceCode string
+	ResourceName string
+	StartDisplay string
+	EndDisplay   string
+	StartInstant string
+	EndInstant   string
+	Purpose      string
+	Status       string
+	StatusClass  string
+}
+
 type bookingDetailView struct {
 	ID               string
 	ResourceID       string
@@ -119,6 +132,22 @@ func scheduleRows(views []database.BookingView, now time.Time, jakarta *time.Loc
 			StartInstant: view.StartAt.UTC().Format(time.RFC3339Nano),
 			EndInstant:   view.EndAt.UTC().Format(time.RFC3339Nano),
 			Purpose:      view.Purpose, Status: status, StatusClass: className, Cancelled: cancelled,
+		})
+	}
+	return rows
+}
+
+func myBookingRows(views []database.BookingView, now time.Time, jakarta *time.Location) []myBookingRow {
+	rows := make([]myBookingRow, 0, len(views))
+	for _, view := range views {
+		status, className, _ := bookingTimeStatus(view.State, view.StartAt, view.EndAt, now)
+		rows = append(rows, myBookingRow{
+			ID: view.ID, ResourceCode: view.ResourceCode, ResourceName: view.ResourceName,
+			StartDisplay: view.StartAt.In(jakarta).Format("02 Jan 2006 15:04"),
+			EndDisplay:   view.EndAt.In(jakarta).Format("02 Jan 2006 15:04"),
+			StartInstant: view.StartAt.UTC().Format(time.RFC3339Nano),
+			EndInstant:   view.EndAt.UTC().Format(time.RFC3339Nano),
+			Purpose:      view.Purpose, Status: status, StatusClass: className,
 		})
 	}
 	return rows

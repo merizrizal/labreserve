@@ -105,6 +105,131 @@ async function fillBookingForm(form, start, end, purpose) {
   await form.getByLabel("Purpose").fill(purpose);
 }
 
+async function bookingIDsOnPage(page) {
+  return page.locator('.booking-row a[href^="/bookings/"]').evaluateAll((links) =>
+    links.map((link) => link.getAttribute("href").split("/").pop()),
+  );
+}
+
+async function insertMyBookingsFixture(pool, ownerID, resourceID, start, purpose, state = "confirmed") {
+  const end = new Date(start.getTime() + 30 * 60 * 1000);
+  const cancelledBy = state === "cancelled" ? ownerID : null;
+  const cancelledAt = state === "cancelled" ? start : null;
+  const result = await pool.query(
+    `INSERT INTO bookings (
+       id, resource_id, owner_account_id, request_id, start_at, end_at,
+       purpose, state, created_at, cancelled_by_account_id, cancelled_at
+     ) VALUES (gen_random_uuid(), $1, $2, gen_random_uuid(), $3, $4, $5, $6, $3, $7, $8)
+     RETURNING id::text`,
+    [resourceID, ownerID, start, end, purpose, state, cancelledBy, cancelledAt],
+  );
+  return result.rows[0].id;
+}
+
+test("My Bookings is owner-scoped, retained, paginated, and read-only", async ({ page, request, browser, baseURL }) => {
+  const unauthenticated = await request.get(`${baseURL}/my-bookings`, { maxRedirects: 0 });
+  expect(unauthenticated.status()).toBe(303);
+
+  await signIn(page);
+  expect(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)).toBe("America/New_York");
+  await page.goto("/my-bookings");
+  await expect(page.getByRole("heading", { name: "My Bookings" })).toBeVisible();
+  await expect(page.getByText("You don't have any bookings yet.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Browse resources" })).toHaveAttribute("href", "/resources");
+
+  const pool = getVerificationPool();
+  const accountIDs = await pool.query("SELECT login, id::text FROM accounts WHERE login = ANY($1)", [["alex@example.test", "sam@example.test"]]);
+  const ownerIDs = Object.fromEntries(accountIDs.rows.map((row) => [row.login, row.id]));
+  const resourceRows = await pool.query("SELECT code, id::text FROM resources WHERE lower(code) = ANY($1)", [["net-01", "k8s-01", "demo-01"]]);
+  const resources = Object.fromEntries(resourceRows.rows.map((row) => [row.code.toLowerCase(), row.id]));
+  expect(Object.keys(ownerIDs)).toHaveLength(2);
+  expect(Object.keys(resources)).toHaveLength(3);
+
+  const prefix = `task3a-e2e-${Date.now()}`;
+  const now = controlledNow();
+  const past = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+  await insertMyBookingsFixture(pool, ownerIDs["alex@example.test"], resources["net-01"], past, `${prefix} past`);
+  const inUse = new Date(now.getTime() - 5 * 60 * 1000);
+  await insertMyBookingsFixture(pool, ownerIDs["alex@example.test"], resources["k8s-01"], inUse, `${prefix} in use`);
+  const upcoming = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const xssPurpose = `<script>window.task3aXss = true</script> ${prefix} upcoming`;
+  const upcomingID = await insertMyBookingsFixture(pool, ownerIDs["alex@example.test"], resources["demo-01"], upcoming, xssPurpose);
+  const cancelled = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
+  await insertMyBookingsFixture(pool, ownerIDs["alex@example.test"], resources["demo-01"], cancelled, `${prefix} cancelled`, "cancelled");
+
+  for (let index = 0; index < 52; index++) {
+    const start = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000 + Math.floor(index / 2) * 30 * 60 * 1000);
+    const resourceID = index % 2 === 0 ? resources["net-01"] : resources["k8s-01"];
+    await insertMyBookingsFixture(pool, ownerIDs["alex@example.test"], resourceID, start, `${prefix} page-${index}`);
+  }
+  const samBookingStart = new Date(now.getTime() + 4 * 24 * 60 * 60 * 1000);
+  const samBookingID = await insertMyBookingsFixture(pool, ownerIDs["sam@example.test"], resources["demo-01"], samBookingStart, `${prefix} Sam only`);
+
+  const expectedRows = await pool.query(
+    "SELECT id::text FROM bookings WHERE owner_account_id = $1 ORDER BY start_at ASC, id ASC",
+    [ownerIDs["alex@example.test"]],
+  );
+  expect(expectedRows.rows).toHaveLength(56);
+  const expectedIDs = expectedRows.rows.map((row) => row.id);
+  const beforeReads = await pool.query("SELECT (SELECT count(*)::int FROM bookings) AS bookings, (SELECT count(*)::int FROM activity_events) AS events");
+
+  await page.goto(`/my-bookings?owner_id=${ownerIDs["sam@example.test"]}&account_id=${ownerIDs["sam@example.test"]}`);
+  await expect(page.locator(".booking-row")).toHaveCount(25);
+  await expect(page.getByRole("link", { name: "Next page" })).toHaveAttribute("href", "/my-bookings?page=2");
+  await expect(page.getByText("Upcoming", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("In use", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Past", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Cancelled", { exact: true }).first()).toBeVisible();
+  const firstPageIDs = await bookingIDsOnPage(page);
+  expect(firstPageIDs).toEqual(expectedIDs.slice(0, 25));
+  expect(firstPageIDs).toContain(upcomingID);
+  expect(await page.locator("script").count()).toBe(0);
+  expect(await page.evaluate(() => window.task3aXss)).toBeUndefined();
+  const upcomingRow = page.locator(".booking-row").filter({ has: page.getByRole("link", { name: `Booking ${upcomingID}` }) });
+  await expect(upcomingRow).toContainText("Resource: DEMO-01 — Customer Demo Environment");
+  await expect(upcomingRow.locator("p").nth(2)).toHaveText(`Purpose: ${xssPurpose}`);
+  await expect(upcomingRow).toContainText("Asia/Jakarta");
+  await expect(upcomingRow.getByRole("link", { name: `Booking ${upcomingID}` })).toBeVisible();
+  expect(firstPageIDs).not.toContain(samBookingID);
+  await expect(page.getByText(`${prefix} Sam only`)).toHaveCount(0);
+
+  await page.getByRole("link", { name: `Booking ${upcomingID}` }).click();
+  await expect(page.getByRole("heading", { name: "Booking details" })).toBeVisible();
+  await expect(page.getByText("DEMO-01 — Customer Demo Environment")).toBeVisible();
+  await page.goto("/my-bookings");
+
+  await page.getByRole("link", { name: "Next page" }).click();
+  await expect(page).toHaveURL(/\/my-bookings\?page=2$/);
+  await expect(page.locator(".booking-row")).toHaveCount(25);
+  const secondPageIDs = await bookingIDsOnPage(page);
+  expect(secondPageIDs).toEqual(expectedIDs.slice(25, 50));
+  expect(new Set([...firstPageIDs, ...secondPageIDs]).size).toBe(50);
+
+  await page.getByRole("link", { name: "Next page" }).click();
+  await expect(page).toHaveURL(/\/my-bookings\?page=3$/);
+  await expect(page.locator(".booking-row")).toHaveCount(6);
+  const thirdPageIDs = await bookingIDsOnPage(page);
+  expect(thirdPageIDs).toEqual(expectedIDs.slice(50));
+  expect(new Set([...firstPageIDs, ...secondPageIDs, ...thirdPageIDs]).size).toBe(56);
+  await expect(page.getByRole("link", { name: "Next page" })).toHaveCount(0);
+
+  const samContext = await browser.newContext({ baseURL, timezoneId: "America/New_York" });
+  try {
+    const samPage = await samContext.newPage();
+    await signIn(samPage, "sam@example.test", "SEED_SAM_PASSWORD");
+    await samPage.goto("/my-bookings");
+    const samRows = samPage.locator(".booking-row");
+    await expect(samRows).toHaveCount(1);
+    await expect(samRows.first()).toContainText(`${prefix} Sam only`);
+    await expect(samRows.first()).not.toContainText(`${prefix} page-`);
+  } finally {
+    await samContext.close();
+  }
+
+  const afterReads = await pool.query("SELECT (SELECT count(*)::int FROM bookings) AS bookings, (SELECT count(*)::int FROM activity_events) AS events");
+  expect(afterReads.rows[0]).toEqual(beforeReads.rows[0]);
+});
+
 test("booking form creates, safely replays, and displays Jakarta cross-midnight bookings", async ({ page, request, baseURL }) => {
   await signIn(page);
   expect(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)).toBe("America/New_York");

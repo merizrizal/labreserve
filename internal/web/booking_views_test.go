@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	"labreserve.local/labreserve/internal/database"
 )
 
 func TestBookingRequestIDsAreFreshUUIDs(t *testing.T) {
@@ -72,6 +74,43 @@ func TestBookingTimeStatusBoundaries(t *testing.T) {
 				t.Fatalf("booking status = %q; want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestMyBookingRowsUseJakartaTimesAndControlledStatusBoundaries(t *testing.T) {
+	jakarta, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2040, time.January, 2, 10, 0, 0, 0, jakarta)
+	end := start.Add(30 * time.Minute)
+	view := database.BookingView{ID: "booking", ResourceCode: "NET-01", ResourceName: "Network Test Bench", StartAt: start, EndAt: end, State: "confirmed"}
+	cases := []struct {
+		name string
+		now  time.Time
+		want string
+	}{
+		{name: "immediately before start", now: start.Add(-time.Nanosecond), want: "Upcoming"},
+		{name: "exactly at start", now: start, want: "In use"},
+		{name: "immediately before end", now: end.Add(-time.Nanosecond), want: "In use"},
+		{name: "exactly at end", now: end, want: "Past"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			row := myBookingRows([]database.BookingView{view}, test.now, jakarta)[0]
+			if row.Status != test.want {
+				t.Fatalf("My Bookings status = %q; want %q", row.Status, test.want)
+			}
+			if row.StartDisplay != "02 Jan 2040 10:00" || row.EndDisplay != "02 Jan 2040 10:30" {
+				t.Fatalf("My Bookings times = %q–%q; want Jakarta-local times", row.StartDisplay, row.EndDisplay)
+			}
+		})
+	}
+	view.State = "cancelled"
+	for _, now := range []time.Time{start.Add(-time.Hour), start, end, end.Add(time.Hour)} {
+		if status := myBookingRows([]database.BookingView{view}, now, jakarta)[0].Status; status != "Cancelled" {
+			t.Errorf("cancelled booking at %v has status %q; want Cancelled", now, status)
+		}
 	}
 }
 

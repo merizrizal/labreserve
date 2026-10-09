@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "header" .}}
+<main>
+  <h1>My Bookings</h1>
+  <p>Booking times are shown in Asia/Jakarta. Records are ordered by start time and Booking ID, 25 per page.</p>
+  {{if .HasMyBookings}}
+  <ol class="booking-list">
+    {{range .MyBookings}}
+    <li class="booking-row {{.StatusClass}}">
+      <h2><a href="/bookings/{{.ID}}">Booking {{.ID}}</a></h2>
+      <p>Resource: <strong>{{.ResourceCode}} — {{.ResourceName}}</strong></p>
+      <p>Start and end (Asia/Jakarta): <time datetime="{{.StartInstant}}">{{.StartDisplay}}</time> – <time datetime="{{.EndInstant}}">{{.EndDisplay}}</time></p>
+      <p>Purpose: {{.Purpose}}</p>
+      <p>Status: <span class="state {{.StatusClass}}">{{.Status}}</span></p>
+    </li>
+    {{end}}
+  </ol>
+  {{else if gt .Page 1}}
+  <p class="notice">No bookings appear on this page. <a href="/my-bookings?page={{.PreviousPage}}">Return to the previous page</a>.</p>
+  {{else}}
+  <p class="notice" id="empty-my-bookings">You don't have any bookings yet.</p>
+  <p><a href="/resources">Browse resources</a></p>
+  {{end}}
+  {{if or .HasPreviousPage .HasNextPage}}
+  <nav class="pagination" aria-label="My Bookings pages">
+    {{if .HasPreviousPage}}<a href="/my-bookings?page={{.PreviousPage}}">Previous page</a>{{end}}
+    <span>Page {{.Page}}</span>
+    {{if .HasNextPage}}<a href="/my-bookings?page={{.NextPage}}">Next page</a>{{end}}
+  </nav>
+  {{end}}
+</main>
+{{template "footer" .}}
