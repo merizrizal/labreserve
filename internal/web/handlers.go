@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"time"
 
@@ -268,7 +269,12 @@ func (s *Server) myBookings(w http.ResponseWriter, r *http.Request) {
 	}
 	state, _ := requestStateFrom(r)
 	identity := state.session.Identity
-	page, offset, validPage := bookingPageOffset(r.URL.Query())
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		http.Error(w, "Choose a valid bookings page.", http.StatusBadRequest)
+		return
+	}
+	page, offset, validPage := bookingPageOffset(query)
 	if !validPage {
 		http.Error(w, "Choose a valid bookings page.", http.StatusBadRequest)
 		return

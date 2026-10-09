@@ -1,6 +1,6 @@
 # LabReserve
 
-LabReserve is a local, server-rendered Go proof of concept for a shared engineering resource catalog. **Current scope includes the Delivery 1 foundation and Tasks 2A–2C plus Task 3A:** sign in/out, role-aware authenticated access, resource browsing and schedules, browser booking creation through the Task 2B service, database-backed booking/activity-event persistence with booking invariants, and authenticated My Bookings. My Bookings is read-only; cancellation, resource management, and activity-history screens are not implemented.
+LabReserve is a local, server-rendered Go proof of concept for a shared engineering resource catalog. **Current scope includes the Delivery 1 foundation and Tasks 2A–2C plus Task 3A:** sign in/out, role-aware authenticated access, resource browsing and schedules, browser booking creation through the Task 2B service, database-backed booking/activity-event persistence with booking invariants, and authenticated My Bookings. My Bookings is read-only; cancellation (including coordinator cancellation), rescheduling, Resource management, and activity-history UI are deferred and not implemented.
 
 ## Requirements
 
@@ -98,4 +98,4 @@ These defaults describe the current implementation and do not expand product sco
 
 **Implemented — Task 3A My Bookings:** authenticated, database-owner-filtered read-only views of retained bookings across resources; Upcoming/In use/Past/Cancelled labels derived from the authoritative clock; stable `start_at ASC, id ASC` pages of 25; escaped purpose text; and links to the existing Booking detail view. Pagination accepts one positive page number; invalid or repeated page values receive a safe HTTP 400 response.
 
-**Still deferred:** booking cancellation, resource management workflows, and activity-history UI. External authentication, Redis, infrastructure access, and production deployment are also out of scope. Local demo credentials are intentionally fictional and **not suitable for any non-demo environment**.
+**Still deferred:** booking cancellation (including coordinator cancellation), booking rescheduling, Resource management workflows, and activity-history UI. External authentication, Redis, infrastructure access, and production deployment are also out of scope. Local demo credentials are intentionally fictional and **not suitable for any non-demo environment**.

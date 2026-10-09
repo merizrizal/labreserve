@@ -116,9 +116,8 @@ func TestMyBookingsUsesAuthenticatedOwnerAndRendersRetainedRecordsReadOnly(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestFor := func(path string, identity *database.Identity) *httptest.ResponseRecorder {
+	serveMyBookings := func(request *http.Request, identity *database.Identity) *httptest.ResponseRecorder {
 		t.Helper()
-		request := httptest.NewRequest(http.MethodGet, path, nil)
 		if identity != nil {
 			request = request.WithContext(withState(request, requestState{
 				hasSession: true,
@@ -128,6 +127,16 @@ func TestMyBookingsUsesAuthenticatedOwnerAndRendersRetainedRecordsReadOnly(t *te
 		response := httptest.NewRecorder()
 		application.myBookings(response, request)
 		return response
+	}
+	requestFor := func(path string, identity *database.Identity) *httptest.ResponseRecorder {
+		t.Helper()
+		return serveMyBookings(httptest.NewRequest(http.MethodGet, path, nil), identity)
+	}
+	requestForRawQuery := func(rawQuery string, identity *database.Identity) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/my-bookings", nil)
+		request.URL.RawQuery = rawQuery
+		return serveMyBookings(request, identity)
 	}
 	identity := func(id, name string, role database.Role) *database.Identity {
 		return &database.Identity{ID: id, DisplayName: name, Role: role}
@@ -189,9 +198,44 @@ func TestMyBookingsUsesAuthenticatedOwnerAndRendersRetainedRecordsReadOnly(t *te
 	if empty.Code != http.StatusOK || clockReads != readsBefore+1 || !strings.Contains(empty.Body.String(), "You don't have any bookings yet.") || !strings.Contains(empty.Body.String(), `href="/resources"`) {
 		t.Fatalf("empty-state response is not useful: status=%d body=%s", empty.Code, empty.Body.String())
 	}
-	invalidPage := requestFor("/my-bookings?page=0", identity(alexID, "Task 3A Engineer A", database.RoleEngineer))
-	if invalidPage.Code != http.StatusBadRequest || strings.Contains(invalidPage.Body.String(), "SQLSTATE") {
-		t.Fatalf("invalid page response = %d body=%s; want a safe 400", invalidPage.Code, invalidPage.Body.String())
+	var paginationBookingsBefore, paginationEventsBefore int64
+	if err := migrationPool.QueryRow(t.Context(), "SELECT count(*) FROM bookings").Scan(&paginationBookingsBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrationPool.QueryRow(t.Context(), "SELECT count(*) FROM activity_events").Scan(&paginationEventsBefore); err != nil {
+		t.Fatal(err)
+	}
+	paginationCases := []struct {
+		name       string
+		rawQuery   string
+		wantStatus int
+	}{
+		{name: "malformed percent encoding", rawQuery: "page=%ZZ", wantStatus: http.StatusBadRequest},
+		{name: "malformed repeated page parameter", rawQuery: "page=1&page=%ZZ", wantStatus: http.StatusBadRequest},
+		{name: "valid page", rawQuery: "page=1", wantStatus: http.StatusOK},
+		{name: "repeated valid page parameters", rawQuery: "page=1&page=2", wantStatus: http.StatusBadRequest},
+		{name: "zero page", rawQuery: "page=0", wantStatus: http.StatusBadRequest},
+		{name: "negative page", rawQuery: "page=-1", wantStatus: http.StatusBadRequest},
+		{name: "empty page", rawQuery: "page=", wantStatus: http.StatusBadRequest},
+		{name: "non-numeric page", rawQuery: "page=abc", wantStatus: http.StatusBadRequest},
+		{name: "parse-overflowing page", rawQuery: "page=999999999999999999999999", wantStatus: http.StatusBadRequest},
+		{name: "offset-overflowing page", rawQuery: "page=9223372036854775807", wantStatus: http.StatusBadRequest},
+	}
+	for _, test := range paginationCases {
+		response := requestForRawQuery(test.rawQuery, identity(alexID, "Task 3A Engineer A", database.RoleEngineer))
+		if response.Code != test.wantStatus || (test.wantStatus == http.StatusBadRequest && strings.Contains(response.Body.String(), "SQLSTATE")) {
+			t.Errorf("%s response = %d body=%s; want safe status %d", test.name, response.Code, response.Body.String(), test.wantStatus)
+		}
+	}
+	var paginationBookingsAfter, paginationEventsAfter int64
+	if err := migrationPool.QueryRow(t.Context(), "SELECT count(*) FROM bookings").Scan(&paginationBookingsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrationPool.QueryRow(t.Context(), "SELECT count(*) FROM activity_events").Scan(&paginationEventsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if paginationBookingsBefore != paginationBookingsAfter || paginationEventsBefore != paginationEventsAfter {
+		t.Fatalf("pagination requests changed business records: bookings %d->%d, events %d->%d", paginationBookingsBefore, paginationBookingsAfter, paginationEventsBefore, paginationEventsAfter)
 	}
 
 	detailRequest := httptest.NewRequest(http.MethodGet, "/bookings/"+upcomingID, nil)
