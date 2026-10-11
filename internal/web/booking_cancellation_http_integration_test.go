@@ -358,12 +358,59 @@ func TestOwnerCancellationHTTPRejectsStartedBookingsAndHidesOperationalFailure(t
 		app.createBooking(t, alexClient, baseStart.Add(2*time.Hour), "past rejection"),
 		app.createBooking(t, alexClient, baseStart.Add(3*time.Hour), "event-failure rollback"),
 	}
+	exactStartFixture := fixtures[0]
+	app.setNow(exactStartFixture.start.Add(-time.Microsecond))
+	eligibleDetail := mustGet(t, alexClient, app.server.URL+"/bookings/"+exactStartFixture.id)
+	eligibleDetailBody := readAndClose(t, eligibleDetail)
+	cancelAction := "/bookings/" + exactStartFixture.id + "/cancel"
+	formStart := strings.Index(eligibleDetailBody, `<form action="`+cancelAction+`"`)
+	if eligibleDetail.StatusCode != http.StatusOK || formStart < 0 {
+		t.Fatalf("owner detail did not render cancellation form one microsecond before start: status=%d body=%s", eligibleDetail.StatusCode, eligibleDetailBody)
+	}
+	formEnd := strings.Index(eligibleDetailBody[formStart:], "</form>")
+	if formEnd < 0 {
+		t.Fatalf("rendered cancellation form is incomplete: %s", eligibleDetailBody)
+	}
+	cancellationForm := eligibleDetailBody[formStart : formStart+formEnd]
+	if !strings.Contains(cancellationForm, "Cancel booking") || !strings.Contains(cancellationForm, `name="_csrf"`) {
+		t.Fatalf("rendered cancellation form lacks its action or CSRF credential: %s", cancellationForm)
+	}
+	staleFormCSRF := csrfFrom(t, cancellationForm)
+	assertCancellationHTTPSnapshot(t, app.migrationDB, exactStartFixture.id, "confirmed", "", 1, 0)
+	readCreationEvent := func() string {
+		var event string
+		if err := app.migrationDB.QueryRow(t.Context(), `
+			SELECT to_jsonb(e)::text FROM activity_events e
+			WHERE e.booking_id = $1 AND e.action = 'booking.created'`, exactStartFixture.id).Scan(&event); err != nil {
+			t.Fatalf("read original creation Activity event: %v", err)
+		}
+		return event
+	}
+	creationEventBefore := readCreationEvent()
+
+	app.setNow(exactStartFixture.start)
+	staleResponse := bookingHTTPPost(t, alexClient, app.server.URL+cancelAction,
+		cancellationHTTPOrigin, url.Values{"_csrf": {staleFormCSRF}})
+	staleBody := readAndClose(t, staleResponse)
+	if staleResponse.StatusCode != http.StatusConflict || !strings.Contains(staleBody, "can no longer be cancelled") ||
+		!strings.Contains(staleBody, `href="/bookings/`+exactStartFixture.id+`"`) || strings.Contains(staleBody, "ErrCancellationStarted") {
+		t.Fatalf("previously eligible form POSTed at the exact start = %d body=%s; want safe 409 and no cancellation", staleResponse.StatusCode, staleBody)
+	}
+	assertCancellationHTTPSnapshot(t, app.migrationDB, exactStartFixture.id, "confirmed", "", 1, 0)
+	if creationEventAfter := readCreationEvent(); creationEventAfter != creationEventBefore {
+		t.Fatalf("stale cancellation changed the original creation Activity event: before=%s after=%s", creationEventBefore, creationEventAfter)
+	}
+	atStartDetail := mustGet(t, alexClient, app.server.URL+"/bookings/"+exactStartFixture.id)
+	atStartDetailBody := readAndClose(t, atStartDetail)
+	if atStartDetail.StatusCode != http.StatusOK || strings.Contains(atStartDetailBody, cancelAction) || strings.Contains(atStartDetailBody, "Cancel booking") {
+		t.Fatalf("detail at the exact start still exposed cancellation: status=%d body=%s", atStartDetail.StatusCode, atStartDetailBody)
+	}
+
 	timeCases := []struct {
 		name  string
 		index int
 		now   time.Time
 	}{
-		{name: "exactly at start", index: 0, now: fixtures[0].start},
 		{name: "after start", index: 1, now: fixtures[1].start.Add(time.Microsecond)},
 		{name: "past end", index: 2, now: fixtures[2].end.Add(time.Microsecond)},
 	}
