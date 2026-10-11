@@ -49,15 +49,17 @@ const (
 )
 
 type Booking struct {
-	ID             string
-	ResourceID     string
-	OwnerAccountID string
-	RequestID      string
-	StartAt        time.Time
-	EndAt          time.Time
-	Purpose        string
-	State          State
-	CreatedAt      time.Time
+	ID                   string
+	ResourceID           string
+	OwnerAccountID       string
+	RequestID            string
+	StartAt              time.Time
+	EndAt                time.Time
+	Purpose              string
+	State                State
+	CreatedAt            time.Time
+	CancelledByAccountID *string
+	CancelledAt          *time.Time
 }
 
 type Resource struct {

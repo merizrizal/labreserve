@@ -42,10 +42,11 @@ func (tx *bookingCreationTransaction) FindBookingByRequest(ctx context.Context, 
 	var state string
 	err := tx.tx.QueryRow(ctx, `
 		SELECT id::text, resource_id::text, owner_account_id::text, request_id::text,
-		       start_at, end_at, purpose, state, created_at
+		       start_at, end_at, purpose, state, created_at, cancelled_by_account_id, cancelled_at
 		FROM bookings WHERE owner_account_id = $1 AND request_id = $2`, ownerID, requestID).Scan(
 		&booking.ID, &booking.ResourceID, &booking.OwnerAccountID, &booking.RequestID,
-		&booking.StartAt, &booking.EndAt, &booking.Purpose, &state, &booking.CreatedAt)
+		&booking.StartAt, &booking.EndAt, &booking.Purpose, &state, &booking.CreatedAt,
+		&booking.CancelledByAccountID, &booking.CancelledAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return bookings.Booking{}, false, nil
 	}
