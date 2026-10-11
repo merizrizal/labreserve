@@ -19,15 +19,16 @@ import (
 var assets embed.FS
 
 type Server struct {
-	store          *database.Store
-	auth           *auth.Service
-	bookingService *bookings.Service
-	templates      *template.Template
-	secureCookie   bool
-	publicOrigin   string
-	jakarta        *time.Location
-	now            func() time.Time
-	handler        http.Handler
+	store               *database.Store
+	auth                *auth.Service
+	bookingService      *bookings.Service
+	cancellationService *bookings.CancellationService
+	templates           *template.Template
+	secureCookie        bool
+	publicOrigin        string
+	jakarta             *time.Location
+	now                 func() time.Time
+	handler             http.Handler
 }
 
 type PageData struct {
@@ -50,6 +51,7 @@ type PageData struct {
 	NextPage        int64
 	BookingForm     bookingFormValues
 	Booking         *bookingDetailView
+	BookingID       string
 	BookingResult   string
 	BookingDate     string
 }
@@ -67,7 +69,8 @@ func New(store *database.Store, authentication *auth.Service, cfg config.Config,
 		return nil, fmt.Errorf("load Asia/Jakarta timezone: %w", err)
 	}
 	server := &Server{
-		store: store, auth: authentication, bookingService: bookings.NewService(store, now), templates: templates,
+		store: store, auth: authentication, bookingService: bookings.NewService(store, now),
+		cancellationService: bookings.NewCancellationService(store, now), templates: templates,
 		secureCookie: cfg.CookieSecure, publicOrigin: cfg.PublicOrigin,
 		jakarta: jakarta, now: now,
 	}
@@ -82,6 +85,7 @@ func New(store *database.Store, authentication *auth.Service, cfg config.Config,
 	mux.HandleFunc("POST /resources/{id}/bookings", server.createBooking)
 	mux.HandleFunc("GET /resources/{id}", server.resourceDetail)
 	mux.HandleFunc("GET /bookings/{id}", server.bookingDetailPage)
+	mux.HandleFunc("POST /bookings/{id}/cancel", server.cancelBooking)
 	mux.HandleFunc("GET /static/style.css", server.stylesheet)
 	server.handler = server.middleware(mux)
 	return server, nil

@@ -64,6 +64,7 @@ type bookingDetailView struct {
 	Purpose          string
 	Status           string
 	StatusClass      string
+	CanCancel        bool
 }
 
 func newBookingRequestID() (string, error) {
@@ -151,6 +152,11 @@ func myBookingRows(views []database.BookingView, now time.Time, jakarta *time.Lo
 		})
 	}
 	return rows
+}
+
+func canCancelBooking(view database.BookingView, ownerID string, now time.Time) bool {
+	status, _, _ := bookingTimeStatus(view.State, view.StartAt, view.EndAt, now)
+	return view.OwnerAccountID == ownerID && view.State == "confirmed" && status == "Upcoming"
 }
 
 func bookingDetail(view database.BookingView, now time.Time, jakarta *time.Location) bookingDetailView {

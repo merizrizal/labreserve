@@ -77,6 +77,34 @@ func TestBookingTimeStatusBoundaries(t *testing.T) {
 	}
 }
 
+func TestBookingCancellationActionRequiresOwnerAndUpcomingConfirmedState(t *testing.T) {
+	start := time.Date(2040, time.January, 2, 10, 0, 0, 0, time.UTC)
+	view := database.BookingView{
+		OwnerAccountID: "owner", StartAt: start, EndAt: start.Add(time.Hour), State: "confirmed",
+	}
+	for _, test := range []struct {
+		name    string
+		ownerID string
+		state   string
+		now     time.Time
+		want    bool
+	}{
+		{name: "owner before start", ownerID: "owner", state: "confirmed", now: start.Add(-time.Microsecond), want: true},
+		{name: "non-owner before start", ownerID: "other", state: "confirmed", now: start.Add(-time.Microsecond)},
+		{name: "exactly at start", ownerID: "owner", state: "confirmed", now: start},
+		{name: "after start", ownerID: "owner", state: "confirmed", now: start.Add(time.Microsecond)},
+		{name: "past", ownerID: "owner", state: "confirmed", now: start.Add(time.Hour)},
+		{name: "already cancelled", ownerID: "owner", state: "cancelled", now: start.Add(-time.Hour)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			view.State = test.state
+			if got := canCancelBooking(view, test.ownerID, test.now); got != test.want {
+				t.Fatalf("canCancelBooking = %v; want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestMyBookingRowsUseJakartaTimesAndControlledStatusBoundaries(t *testing.T) {
 	jakarta, err := time.LoadLocation("Asia/Jakarta")
 	if err != nil {

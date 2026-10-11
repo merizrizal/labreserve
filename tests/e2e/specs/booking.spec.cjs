@@ -45,6 +45,21 @@ async function expectIntervalCounts(resourceID, start, end, expectedBookings, ex
   expect(result.rows[0].event_count).toBe(expectedEvents);
 }
 
+async function cancellationSnapshot(bookingID) {
+  const result = await getVerificationPool().query(
+    `SELECT b.state, b.owner_account_id::text AS owner_id,
+            b.cancelled_by_account_id::text AS cancelled_by, b.cancelled_at,
+            (SELECT count(*)::int FROM activity_events e WHERE e.booking_id = b.id AND e.action = 'booking.created') AS creation_events,
+            (SELECT count(*)::int FROM activity_events e WHERE e.booking_id = b.id AND e.action = 'booking.cancelled') AS cancellation_events,
+            (SELECT count(*)::int FROM activity_events e
+             WHERE e.booking_id = b.id AND e.action = 'booking.cancelled' AND e.actor_account_id = b.owner_account_id) AS owner_cancellation_events
+     FROM bookings b WHERE b.id = $1`,
+    [bookingID],
+  );
+  expect(result.rows).toHaveLength(1);
+  return result.rows[0];
+}
+
 function requiredPassword(name) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} must be supplied to the browser verification`);
@@ -448,4 +463,140 @@ test("Coordinator creates a Booking for their authenticated account", async ({ p
   const times = page.locator(".booking-detail time");
   await expect(times.nth(0)).toHaveAttribute("datetime", expectedUTCFromJakarta(start));
   await expect(times.nth(1)).toHaveAttribute("datetime", expectedUTCFromJakarta(end));
+});
+
+test("owner cancellation is protected, retry-safe, retained, and releases the interval", async ({ page, request, browser, baseURL }) => {
+  await signIn(page);
+  expect(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)).toBe("America/New_York");
+  const resourceID = await openNetworkLab(page);
+  const bookingDate = jakartaDateAfter(1);
+  const start = `${bookingDate}T13:00`;
+  const end = `${bookingDate}T14:00`;
+  await page.goto(`/resources/${resourceID}/bookings/new`);
+  const form = page.locator(`form[action="/resources/${resourceID}/bookings"]`);
+  const requestID = await form.locator('input[name="request_id"]').inputValue();
+  const purpose = "Task 3C owner cancellation and interval release";
+  await fillBookingForm(form, start, end, purpose);
+  await form.getByRole("button", { name: "Create booking" }).click();
+  await expect(page).toHaveURL(/\/bookings\/[0-9a-f-]+\?result=created$/i);
+  const bookingID = new URL(page.url()).pathname.split("/").pop();
+  expect(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)).toBe("America/New_York");
+  await expectRequestCounts("alex@example.test", requestID, 1, 1);
+  await expect(page.getByRole("button", { name: "Cancel booking" })).toBeVisible();
+  const initial = await cancellationSnapshot(bookingID);
+  expect(initial.state).toBe("confirmed");
+  expect(initial.creation_events).toBe(1);
+  expect(initial.cancellation_events).toBe(0);
+  await page.goto("/my-bookings");
+  await page.getByRole("link", { name: `Booking ${bookingID}` }).click();
+  await expect(page).toHaveURL(`${baseURL}/bookings/${bookingID}`);
+  await expect(page.getByRole("button", { name: "Cancel booking" })).toBeVisible();
+
+  const samContext = await browser.newContext({ baseURL, timezoneId: "America/New_York" });
+  try {
+    const samPage = await samContext.newPage();
+    await signIn(samPage, "sam@example.test", "SEED_SAM_PASSWORD");
+    await samPage.goto(`/bookings/${bookingID}`);
+    await expect(samPage.getByRole("heading", { name: "Booking details" })).toBeVisible();
+    await expect(samPage.getByRole("main").getByText("Alex Morgan", { exact: true })).toBeVisible();
+    await expect(samPage.getByRole("button", { name: "Cancel booking" })).toHaveCount(0);
+
+    const owner = await getVerificationPool().query("SELECT id::text FROM accounts WHERE login = $1", ["alex@example.test"]);
+    const samCSRF = await samPage.locator('form[action="/logout"] input[name="_csrf"]').inputValue();
+    const samCookie = (await samPage.context().cookies(baseURL)).find((cookie) => cookie.name === "labreserve_session");
+    expect(samCookie).toBeTruthy();
+    const headers = { Cookie: `labreserve_session=${samCookie.value}`, Origin: baseURL };
+    const forged = await request.post(`${baseURL}/bookings/${bookingID}/cancel`, {
+      headers,
+      form: {
+        _csrf: samCSRF,
+        owner_id: owner.rows[0].id,
+        account_id: owner.rows[0].id,
+        role: "coordinator",
+        state: "cancelled",
+        cancelled_by_account_id: owner.rows[0].id,
+      },
+      maxRedirects: 0,
+    });
+    expect(forged.status()).toBe(404);
+    const afterForgery = await cancellationSnapshot(bookingID);
+    expect(afterForgery.state).toBe("confirmed");
+    expect(afterForgery.cancelled_by).toBeNull();
+    expect(afterForgery.creation_events).toBe(1);
+    expect(afterForgery.cancellation_events).toBe(0);
+    const getCancellation = await request.get(`${baseURL}/bookings/${bookingID}/cancel`, { headers, maxRedirects: 0 });
+    expect(getCancellation.status()).toBe(405);
+    expect((await cancellationSnapshot(bookingID)).state).toBe("confirmed");
+
+    await samPage.goto("/my-bookings");
+    await expect(samPage.getByRole("link", { name: `Booking ${bookingID}` })).toHaveCount(0);
+
+    const cancelForm = page.locator(`form[action="/bookings/${bookingID}/cancel"]`);
+    await expect(cancelForm).toHaveCount(1);
+    await cancelForm.getByRole("button", { name: "Cancel booking" }).click();
+    await expect(page).toHaveURL(`${baseURL}/bookings/${bookingID}`);
+    await expect(page.getByRole("heading", { name: "Booking details" })).toBeVisible();
+    await expect(page.getByText("Cancelled", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Cancel booking" })).toHaveCount(0);
+
+    const afterCancellation = await cancellationSnapshot(bookingID);
+    expect(afterCancellation.state).toBe("cancelled");
+    expect(afterCancellation.owner_id).toBe(owner.rows[0].id);
+    expect(afterCancellation.cancelled_by).toBe(owner.rows[0].id);
+    expect(afterCancellation.cancelled_at).toBeTruthy();
+    expect(afterCancellation.creation_events).toBe(1);
+    expect(afterCancellation.cancellation_events).toBe(1);
+    expect(afterCancellation.owner_cancellation_events).toBe(1);
+
+    await page.goto("/my-bookings");
+    const ownerRow = page.locator(".booking-row").filter({ has: page.getByRole("link", { name: `Booking ${bookingID}` }) });
+    await expect(ownerRow).toContainText("Cancelled");
+    await expect(ownerRow).toContainText(purpose);
+    await expect(page.getByRole("button", { name: "Cancel booking" })).toHaveCount(0);
+    await page.goto(`/resources/${resourceID}?date=${bookingDate}`);
+    let scheduleRows = page.locator(".booking-row");
+    const cancelledScheduleRow = scheduleRows.filter({ has: page.getByRole("link", { name: `Booking ${bookingID}` }) });
+    await expect(cancelledScheduleRow).toHaveCount(1);
+    await expect(cancelledScheduleRow).toContainText("Cancelled");
+    await expect(cancelledScheduleRow).toContainText("Cancelled bookings do not occupy the resource.");
+    await expect(cancelledScheduleRow).toContainText(purpose);
+
+    const alexCSRF = await page.locator('form[action="/logout"] input[name="_csrf"]').inputValue();
+    const alexCookie = (await page.context().cookies(baseURL)).find((cookie) => cookie.name === "labreserve_session");
+    expect(alexCookie).toBeTruthy();
+    const replay = await request.post(`${baseURL}/bookings/${bookingID}/cancel`, {
+      headers: { Cookie: `labreserve_session=${alexCookie.value}`, Origin: baseURL },
+      form: { _csrf: alexCSRF },
+      maxRedirects: 0,
+    });
+    expect(replay.status()).toBe(303);
+    expect(replay.headers().location).toBe(`/bookings/${bookingID}`);
+    const afterReplay = await cancellationSnapshot(bookingID);
+    expect(afterReplay.state).toBe("cancelled");
+    expect(afterReplay.cancelled_by).toBe(afterCancellation.cancelled_by);
+    expect(afterReplay.cancelled_at.toISOString()).toBe(afterCancellation.cancelled_at.toISOString());
+    expect(afterReplay.cancellation_events).toBe(1);
+
+    await samPage.goto(`/resources/${resourceID}/bookings/new`);
+    const samForm = samPage.locator(`form[action="/resources/${resourceID}/bookings"]`);
+    const samRequestID = await samForm.locator('input[name="request_id"]').inputValue();
+    await fillBookingForm(samForm, start, end, "Engineer B replacement after cancellation");
+    await samForm.getByRole("button", { name: "Create booking" }).click();
+    await expect(samPage).toHaveURL(/\/bookings\/[0-9a-f-]+\?result=created$/i);
+    const replacementID = new URL(samPage.url()).pathname.split("/").pop();
+    await expectRequestCounts("sam@example.test", samRequestID, 1, 1);
+    await expectIntervalCounts(resourceID, start, end, 1, 2);
+
+    await samPage.goto("/my-bookings");
+    await expect(samPage.getByRole("link", { name: `Booking ${bookingID}` })).toHaveCount(0);
+    await expect(samPage.getByRole("link", { name: `Booking ${replacementID}` })).toBeVisible();
+    await samPage.goto(`/resources/${resourceID}?date=${bookingDate}`);
+    scheduleRows = samPage.locator(".booking-row");
+    const cancelledRow = scheduleRows.filter({ has: samPage.getByRole("link", { name: `Booking ${bookingID}` }) });
+    await expect(cancelledRow).toContainText("Cancelled");
+    const replacementRow = scheduleRows.filter({ has: samPage.getByRole("link", { name: `Booking ${replacementID}` }) });
+    await expect(replacementRow).toContainText("Upcoming");
+  } finally {
+    await samContext.close();
+  }
 });

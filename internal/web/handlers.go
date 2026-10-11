@@ -323,10 +323,51 @@ func (s *Server) bookingDetailPage(w http.ResponseWriter, r *http.Request) {
 	if result != "created" && result != "replayed" {
 		result = ""
 	}
-	detail := bookingDetail(view, s.now(), s.jakarta)
+	state, _ := requestStateFrom(r)
+	now := s.now()
+	detail := bookingDetail(view, now, s.jakarta)
+	detail.CanCancel = canCancelBooking(view, state.session.Identity.ID, now)
 	s.render(w, r, "booking.html", http.StatusOK, PageData{
 		Title: "Booking " + view.ID, Booking: &detail,
 		BookingResult: result, BookingDate: view.StartAt.In(s.jakarta).Format(jakartaDateLayout),
+	})
+}
+
+func (s *Server) cancelBooking(w http.ResponseWriter, r *http.Request) {
+	if !s.requireIdentity(w, r) {
+		return
+	}
+	bookingID := r.PathValue("id")
+	if !uuidPattern.MatchString(bookingID) {
+		http.NotFound(w, r)
+		return
+	}
+	state, _ := requestStateFrom(r)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	_, err := s.cancellationService.Cancel(ctx, bookings.Actor{AccountID: state.session.Identity.ID}, bookingID)
+	cancel()
+	if err == nil {
+		http.Redirect(w, r, "/bookings/"+bookingID, http.StatusSeeOther)
+		return
+	}
+	switch {
+	case errors.Is(err, bookings.ErrBookingNotAccessible):
+		http.NotFound(w, r)
+	case errors.Is(err, bookings.ErrCancellationStarted):
+		s.renderCancellationOutcome(w, r, bookingID, http.StatusConflict,
+			"This Booking has reached or passed its start time and can no longer be cancelled.")
+	case errors.Is(err, bookings.ErrOperational):
+		s.renderCancellationOutcome(w, r, bookingID, http.StatusServiceUnavailable,
+			"Cancellation could not be confirmed. Check the Booking details; an authorized retry is safe.")
+	default:
+		s.renderCancellationOutcome(w, r, bookingID, http.StatusInternalServerError,
+			"Unable to process this cancellation. Check the Booking details and retry if appropriate.")
+	}
+}
+
+func (s *Server) renderCancellationOutcome(w http.ResponseWriter, r *http.Request, bookingID string, status int, message string) {
+	s.render(w, r, "booking_cancellation_outcome.html", status, PageData{
+		Title: "Booking cancellation", Error: message, BookingID: bookingID,
 	})
 }
 

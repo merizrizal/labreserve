@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "header" .}}
+<main class="narrow">
+  <h1>Booking cancellation</h1>
+  <p class="notice error" role="alert">{{.Error}}</p>
+  <p><a href="/bookings/{{.BookingID}}">View Booking details</a></p>
+</main>
+{{template "footer" .}}

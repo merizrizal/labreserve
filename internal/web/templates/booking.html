@@ -17,5 +17,11 @@
     <dt>Purpose</dt><dd>{{.Booking.Purpose}}</dd>
     <dt>Status</dt><dd><span class="state {{.Booking.StatusClass}}">{{.Booking.Status}}</span></dd>
   </dl>
+  {{if .Booking.CanCancel}}
+  <form action="/bookings/{{.Booking.ID}}/cancel" method="post" class="stack">
+    <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+    <button type="submit">Cancel booking</button>
+  </form>
+  {{end}}
 </main>
 {{template "footer" .}}
