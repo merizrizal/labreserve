@@ -390,3 +390,46 @@ The client explicitly approves these cancellation semantics and the required loc
 6. **Owner-only capability now:** Both engineers and coordinators may cancel their own bookings without a reason. Coordinator cancellation of another owner's Booking is deferred to a separately approved capability, which will require a reason.
 
 This approval resolves the post-start retry policy gate. It approves the decision, not application implementation or the broader proposed delivery. The transaction design and verification obligations are recorded in [architecture 002, section 4](architecture/002-my-bookings-and-cancellation.md#4-cancellation-transaction-and-lock-protocol); code changes still require a separately approved, tracked and committed task contract.
+
+---
+
+## 13. Delivery 4 client request — Resource management
+
+### Resource-management context and request
+
+The repository now contains Tasks 3A–3C: My Bookings, atomic owner cancellation, and its browser workflow. Resource browsing and reservation exist, but the application does not yet let coordinators manage the catalog beyond its initially seeded Resources. This records implementation context, not a new acceptance or verification claim for earlier deliveries.
+
+> We already have Resources that engineers can browse and reserve.
+>
+> However, only the initially seeded Resources exist.
+>
+> I want Coordinators to manage those Resources through the application.
+>
+> Coordinators should be able to create Resources, update their descriptive information, activate inactive Resources, and deactivate Resources that are no longer needed.
+>
+> Deactivation must never invalidate a reservation that is currently in use or whose end time is still in the future.
+>
+> All successful Resource changes must be recorded in Activity history.
+
+This request activates existing v0.1 **FR-06 (Manage resources)** and the resource-change recording obligations of **FR-07 (Inspect activity history)**. It adds browser resource management, not another booking state or infrastructure control. Updating these requirements does not itself authorize implementation; separately approved, tracked and committed task contracts are still required.
+
+### Delivery 4 boundary
+
+- Provide coordinator-only browser workflows to create Resources, edit their names and descriptions, activate inactive Resources, and deactivate eligible Resources. New Resources must participate in the existing browse/schedule/reservation workflows, not remain a seed-only inventory.
+- Preserve immutable, case-insensitively unique Resource codes under the existing approved identity decision. Do not offer Resource deletion or change existing Booking identities, intervals, owners, or history when editing a Resource.
+- Reject deactivation, with an explanation, if **any non-cancelled Booking has `end_at > authoritative now`**. This includes Upcoming and In use bookings. Cancelled bookings and bookings ending exactly at or before now do not block deactivation. Do not cancel or shorten bookings automatically; an in-use booking must finish before deactivation.
+- Preserve the existing concurrency guarantee: a booking/deactivation race may accept one incompatible change, not both. Use the existing shared Resource lock protocol and fresh server time after lock waits, as described in [architecture 001, section 10](architecture/001-initial-architecture.md#10-resource-deactivation-and-booking-races).
+- Commit each successful Resource mutation and its required Activity event together. Identify the authenticated actor, action, affected Resource, and server timestamp, with relevant creation details or old/new descriptive information and active state. Failure to record the required event must roll back the Resource change. Rejected requests and unchanged edit/state submissions must not create successful-change events. The approved bootstrap exemption for seed data remains unchanged.
+- Enforce coordinator permissions on the server, including direct requests. Retain authentication, CSRF protection, plain-text rendering, safe errors, and existing booking/replay guarantees.
+
+### Resource-management acceptance emphasis
+
+Demonstrate a coordinator creating a non-seeded Resource that an engineer can browse and reserve, updating its descriptive information without changing its code or retained bookings, activating an inactive Resource, and deactivating an eligible Resource. Each actual change must have exactly one corresponding Activity event with the correct actor and details.
+
+Reject direct engineer management requests and case-insensitive duplicate codes without a Resource mutation or successful-change event. Verify deactivation rejection for both Upcoming and In use bookings, acceptance when only cancelled or ended bookings remain, and the exact end-time boundary with controlled time. Exercise both booking/deactivation lock orders using real PostgreSQL and independent concurrent operations. Inject Activity-write failure for creation, descriptive edits, activation, and deactivation, verifying complete rollback. Browser tests must cover the coordinator workflow, visible eligibility/errors, engineer role restrictions, and safe rendering. Existing verification must continue to pass through `make verify`.
+
+### Exclusions and remaining decisions
+
+This delivery does not request coordinator cancellation of another owner's Booking or its reason workflow, an Activity-history inspection screen, deletion, rescheduling, early release, maintenance windows, or infrastructure automation. Activity recording is mandatory now; coordinator history inspection remains a full-v0.1 obligation for a separately scoped delivery. Coordinators cannot use this request to bypass the existing owner-only cancellation boundary; other owners must cancel their upcoming bookings, or the bookings must finish before deactivation.
+
+Resource name/description validation, including empty-value handling, normalization and any length limits, and the creation form's initial-state/default policy must be settled in the affected task contract before implementation. Do not silently add arbitrary domain restrictions. Existing case-insensitive code identity, code immutability, deactivation safety, and atomic Activity recording are already settled requirements.

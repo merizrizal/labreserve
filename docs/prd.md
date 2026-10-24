@@ -8,16 +8,16 @@ The team needs an internal browser application that prevents resource conflicts,
 
 ## Source Materials
 
-- **[LabReserve v0.1 client baseline](baseline.md):** Primary source for actors, booking rules, security and local-operation constraints, acceptance scenarios, deferred change requests, and delivery boundaries. Section 11 records the post-Delivery 2 request for My Bookings and self-service cancellation; section 12 records the approved owner-cancellation semantics and lock order.
+- **[LabReserve v0.1 client baseline](baseline.md):** Primary source for actors, booking rules, security and local-operation constraints, acceptance scenarios, deferred change requests, and delivery boundaries. Section 11 records the post-Delivery 2 request for My Bookings and self-service cancellation; section 12 records the approved owner-cancellation semantics and lock order; section 13 records the Delivery 4 request for coordinator Resource management and atomic Activity recording.
 - **Repository agent instructions:** Establish this PRD as the authoritative product requirements, require one approved implementation task at a time, and require verification, escalation of genuine conflicts, and independent review in a separate agent session.
 - **[Initial architecture](architecture/001-initial-architecture.md) and Delivery 2 task contracts:** Define the existing foundations and approved booking-creation behavior. [Task 2B](tasks/002b-atomic-booking-creation.md) settles canonical request equivalence; [Task 2C](tasks/002c-booking-web-workflow.md) settles Jakarta-day schedule intersections.
-- **Current implementation and README:** The repository now contains the Go application, PostgreSQL migrations, authentication, booking creation/replay, populated schedules, and Go/HTTP/real-database/Playwright tests. Task 3A read-only My Bookings is present; cancellation remains unimplemented. Delivery 2 completion is reported by the client; this documentation update does not independently certify its acceptance or re-run its verification.
-- **[Delivery 3 architecture addendum](architecture/002-my-bookings-and-cancellation.md):** Records the approved owner-cancellation decision and Resource → Booking lock order alongside the broader proposed design. Decision approval is not implementation approval.
+- **Current implementation and README:** Delivery 1 foundations, Tasks 2A–2C booking creation/replay and schedules, and Tasks 3A–3C My Bookings and owner cancellation through the browser are present. Resource management and the Activity-history screen remain unimplemented. This documentation update records the current codebase context; it does not independently certify acceptance or re-run earlier delivery verification.
+- **[Delivery 3 architecture addendum](architecture/002-my-bookings-and-cancellation.md):** Records the approved owner-cancellation decision and Resource → Booking lock order alongside the original proposed design. Subsequent Tasks 3A–3C supplied the bounded implementation contracts. [Architecture 003](architecture/003-cancellation-privilege-boundary.md) records the accepted development-only limitation of the cancellation database privileges; it does not approve a broader database trust model.
 - **Baseline technical references:** Playwright, Go templates, PostgreSQL ranges, and Docker Compose informed the existing architecture. Their baseline recommendation status does not replace the subsequent architecture and task decisions.
 
 ## Project Mode
 
-**Incremental delivery on an existing application.** Delivery 1 foundations and Delivery 2 booking creation/schedules are present. The latest request advances existing v0.1 booking-view and cancellation requirements; it does not expand the product into rescheduling, early release, or another stored state. Owner-cancellation semantics and the lock order are approved; the broader Delivery 3 proposal does not itself authorize implementation. Each implementation task still requires separate approval and the repository's committed-task preflight.
+**Incremental delivery on an existing application.** Delivery 1 foundations, Delivery 2 booking creation/schedules, and Delivery 3 My Bookings/owner cancellation are present. The latest request advances existing v0.1 Resource management and Activity-recording requirements: coordinators manage the catalog through the application while accepted reservations remain safe. It does not request cross-owner cancellation, an Activity-history screen, rescheduling, early release, or another stored state. The Delivery 4 scope below is requirements documentation, not implementation authorization. Each implementation task still requires separate approval and the repository's committed-task preflight.
 
 ## Solution
 
@@ -139,13 +139,13 @@ Atomic rescheduling and maintenance windows are explicitly deferred change reque
 
 ### Resource management
 
-- **FR-023:** Only coordinators may create resources, edit names/descriptions, or activate/deactivate resources. Codes must remain immutable and resource deletion must not be offered.
-- **FR-024:** Deactivation must be rejected with an explanatory error if a resource has any non-cancelled booking whose end is still in the future, including upcoming and in-use bookings. Coordinators must cancel upcoming bookings first and wait for in-use bookings to finish.
+- **FR-023:** Only coordinators may create resources, edit names/descriptions, or activate/deactivate resources through the application. Newly created resources must be available to the existing browse/schedule/reservation workflows. Codes must remain immutable and case-insensitively unique under the approved identity decision; resource deletion must not be offered. Descriptive or active-state changes must retain existing booking identities/data and history.
+- **FR-024:** Deactivation must be rejected with an explanatory error if a resource has any non-cancelled booking with `end_at > authoritative now`, including upcoming and in-use bookings. Cancelled bookings and bookings ending exactly at or before now do not block it. Do not cancel or shorten bookings automatically. Upcoming bookings must be cancelled through an authorized cancellation workflow, or allowed to finish; in-use bookings must finish. Delivery 4 does not add coordinator cancellation of another owner's booking.
 - **FR-025:** Concurrent booking creation and resource deactivation must preserve both rules: booking requires an active resource, and deactivation requires no non-cancelled booking ending in the future. The final state must not contain an inactive resource with a newly accepted future booking.
 
 ### Activity history and errors
 
-- **FR-026:** Every successful resource or booking change must have an activity event identifying actor, action, affected record, and server timestamp, with relevant details such as cancellation reason or old/new resource name.
+- **FR-026:** Every successful resource or booking change must have an activity event identifying actor, action, affected record, and server timestamp, with relevant details such as cancellation reason or old/new resource name. Resource creation, descriptive edits, activation, and deactivation each require their corresponding event, including relevant creation values or old/new changed values. Rejected requests and unchanged resource edit/state submissions must not create successful-change events; the approved bootstrap exemption for seed data remains unchanged.
 - **FR-027:** Each required activity event and its associated business change must succeed or fail together. Rejected requests must not change business records or create events claiming successful changes.
 - **FR-028:** Only coordinators may inspect activity history. No product interface may edit or delete activity events.
 - **FR-029:** Normal workflows must be available through labelled browser forms and views without SQL or API tools. Rejected bookings must distinguish invalid input, inactive resource, and reservation conflict, without exposing raw database errors.
@@ -209,7 +209,7 @@ These began as baseline recommendations and are now selected in the architecture
 | Local environment | Docker Compose with durable local storage |
 | Verification | Go unit/HTTP tests, real-PostgreSQL integration tests, and Playwright browser tests through `make verify` |
 
-Reuse these choices for the proposed delivery. The architecture addendum explains the cancellation extension without replacing the lock protocol, state model, session boundary, or final-write overlap guarantee. Exact new route and repository API details belong to the approved implementation task, not this PRD.
+Reuse these choices for Delivery 4. Architecture 001 sections 7, 9, and 10 already describe atomic Resource mutations and their shared locking with booking creation/cancellation. Preserve Resource `FOR UPDATE` serialization, fresh authoritative time after lock waits, and the separate post-lock occupancy query; do not replace the lock protocol, state model, session boundary, or final-write overlap guarantee. Exact routes, repository APIs, and narrowly scoped migration-managed Resource write capabilities belong to the approved implementation task, not this PRD.
 
 ## Data and API Contracts
 
@@ -231,7 +231,7 @@ Exact field encodings, schema layout, and identifiers are architectural decision
 - **Browse:** Return resources and selected-resource/date schedules only to authenticated users. Return My Bookings scoped to the authenticated account. Booking list pagination must use 25-record pages and a documented stable order.
 - **Create booking:** Accept a resource identifier, start/end timestamps, purpose, and stable request identifier. Resolve owner server-side. Return the accepted booking's identifier, or return the same identifier for an identical retry. Distinguish invalid input, inactive-resource rejection, reservation conflict, and changed-data request-identifier reuse.
 - **Cancel booking:** For the owner-only capability, identify the booking and authorize the authenticated owner before allowing a Cancelled no-op. Otherwise require Confirmed and fresh authoritative `now < booking.start_at` after Resource → Booking locks. Owner cancellation needs no reason. A successful transition retains the Booking and creation request identifier, releases availability at commit, and atomically records one cancellation event. Authorized repeats succeed even at or after original start, with no metadata changes or new event. Coordinator cross-owner cancellation and its required reason are deferred to a separately approved capability.
-- **Manage resource:** Restrict creation, name/description changes, and activation changes to coordinators. Reject code changes and deactivation blocked by a non-cancelled booking ending in the future.
+- **Manage resource:** Provide coordinator-only browser creation, name/description editing, activation, and deactivation. Enforce case-insensitive code uniqueness at creation and reject later code changes. Activation restores eligibility for the existing booking workflow, subject to all normal booking rules. Deactivation checks for non-cancelled bookings with `end_at >` fresh authoritative time, under the shared Resource lock, and explains rejection without cancelling bookings. Each actual mutation and its required Activity event commit together; unchanged edit/state submissions are no-ops without new events. Do not introduce Resource deletion or change the existing booking creation/replay contract.
 - **Inspect history:** Restrict event access to coordinators and expose relevant actor/action/record/time/details without edit or delete actions.
 - **Errors:** Do not expose database internals. Authentication, authorization, validation, inactive-resource, conflict, and request-identity errors must be distinguishable at the appropriate UI or HTTP boundary. Exact HTTP status codes and response envelopes are deferred to architectural design.
 
@@ -248,7 +248,7 @@ A correct booking/deactivation race may accept the booking and reject deactivati
 - **Booking form/detail:** Show the resource, Jakarta time context, start/end inputs, and purpose. Explain validation, inactive-resource rejection, and conflict. Show the resulting booking after acceptance or identical replay.
 - **My Bookings:** Provide a clearly labelled navigation entry for authenticated users. Show only that account's retained bookings across resources, with resource identity, full interval, purpose, and derived label. Include a useful empty state and stable 25-record pages. Offer cancellation only for the user's own Upcoming Confirmed bookings; a stale page must not bypass fresh server checks. No search, status filters, or calendar UI are required by this request.
 - **Cancellation:** Explain the strict future-only rule for Confirmed bookings. Owner cancellation requires no reason; cross-owner coordinator cancellation and its reason form are deferred. After commit, show the retained Cancelled record and released interval. An authorized repeat remains successful even after original start, without implying another change/event.
-- **Resource management:** Provide coordinator-only create/edit/activate/deactivate actions. When deactivation is blocked, explain that upcoming bookings must be cancelled and in-use bookings must finish.
+- **Resource management:** Provide labelled coordinator-only create/edit/activate/deactivate forms through the browser. Show immutable code, descriptive information, and active state; engineers may browse but must not be offered management actions. Newly created or activated resources participate in the existing schedules and booking forms. Explain duplicate-code and validation errors safely. When deactivation is blocked, explain that upcoming bookings require authorized cancellation or must finish, and in-use bookings must finish. Do not silently cancel reservations or imply that coordinators can cancel another owner's booking through this delivery.
 - **Activity:** Provide coordinators a view of successful changes with actor, affected record, timestamp, and relevant details, including reasons and resource-name changes.
 - **Role-aware presentation:** Do not offer unauthorized actions to engineers, while retaining server checks for direct requests.
 - **Timezone independence:** A non-Jakarta browser must still enter and see the intended Jakarta interval. Date-boundary behavior for bookings crossing midnight must be explicitly decided before implementing date filtering.
@@ -257,7 +257,7 @@ These views may share pages. No component layout, separate SPA, or calendar inte
 
 ## Testing Decisions
 
-Reuse the existing Go booking-service tests, PostgreSQL persistence/transaction tests, HTTP integration tests, derived-label tests, and Playwright fixtures with controlled time. Extend these seams for My Bookings and cancellation rather than introducing a parallel test stack. The following strategy covers full v0.1; proposed Delivery 3 applies its self-service subset:
+Reuse the existing Go service tests, PostgreSQL persistence/transaction tests, HTTP integration tests, derived-label tests, and Playwright fixtures with controlled time. Extend these seams for Resource management rather than introducing a parallel test stack. The following strategy covers full v0.1; Delivery 4 applies its Resource-management and atomic-history subset. Exercise both booking/deactivation lock orders, exact end-time eligibility, and Activity-write failure for every Resource mutation. Recording tests must inspect persisted events even though the Activity-history screen is outside Delivery 4:
 
 1. **Browser workflow tests:** Use the highest practical seam for login/logout, resource/date browsing, creating and viewing bookings, conflict feedback, cancellation/rebooking, My Bookings, coordinator resource management, and activity history. Verify user-visible behavior, not component structure. Isolate test data and exercise a non-Jakarta browser timezone.
 2. **HTTP/handler permission tests:** Send direct unauthenticated and engineer/coordinator requests to protected operations. Verify server-derived ownership/roles, cross-user cancellation rejection, coordinator-only resources/history, session invalidation, and CSRF protection. Check both responses and absence of unauthorized mutations/success events.
@@ -305,7 +305,7 @@ The first 14 criteria preserve the baseline AC-01 through AC-14 in the same orde
 | AC-026 | Controlled time is before start, exactly at start, and exactly at end; a confirmed booking displays Upcoming, In use, and Past respectively. A cancelled booking remains Cancelled. |
 | AC-027 | More than 25 bookings are available; views use 25-record pages and the documented stable order. Past and cancelled bookings remain accessible, and My Bookings contains only the authenticated user's bookings. |
 | AC-028 | A coordinator creates a resource, changes its name/description, and changes eligibility where allowed; each successful change has an actor, action, affected record, server timestamp, and relevant details. Resource code remains immutable and unique, and no deletion action is offered. |
-| AC-029 | A resource has only cancelled bookings or non-cancelled bookings whose end is no longer in the future; those bookings do not block deactivation. |
+| AC-029 | A resource has only cancelled bookings or non-cancelled bookings whose end is no longer in the future; those bookings do not block deactivation. Using controlled time, a Confirmed booking blocks deactivation just before its end but not exactly at or after end. No booking is automatically cancelled, shortened, or deleted. |
 | AC-030 | Startup and seeding are repeated after data exists; bookings are preserved and seed accounts/resources are not duplicated. Explicit reset returns the demonstration to its documented initial state. |
 | AC-031 | A state-changing browser request lacks required CSRF protection; it is rejected without a business mutation. Resource descriptions containing HTML-like content render as text. |
 | AC-032 | The documented demonstration runs locally with synthetic data and no production credentials; after initial downloads, ordinary workflows require no external service. |
@@ -317,12 +317,16 @@ The first 14 criteria preserve the baseline AC-01 through AC-14 in the same orde
 | AC-038 | Two independent authorized cancellations of the same upcoming booking run concurrently against real PostgreSQL; one transition commits, retries are harmless, and exactly one cancellation event with the correct actor/booking exists. |
 | AC-039 | Cancellation waits for a required row lock while controlled server time reaches the booking start; fresh post-lock validation rejects cancellation, retaining Confirmed state and availability occupancy. |
 | AC-040 | After cancellation and normal application/database restarts, the original booking, creation event, and single cancellation event remain. Replaying its original creation request returns that same Cancelled booking without recreating occupancy or another creation event. |
+| AC-041 | A coordinator creates a non-seeded Resource through the browser; an engineer can browse it and reserve it through the existing workflow when active. Activating an inactive Resource restores booking eligibility subject to normal rules; successfully deactivating an eligible Resource makes new bookings fail as inactive. |
+| AC-042 | Resource creation uses an existing code with different casing, including concurrent duplicate-code attempts; database-enforced case-insensitive uniqueness prevents duplicates. An attempted code edit is rejected without changing the retained Resource or creating a successful-change event. |
+| AC-043 | A coordinator updates a Resource's name/description; its identifier/code, retained bookings and original booking request data remain unchanged. Prior Activity details remain intact, and the new event identifies the actor and relevant old/new values. |
+| AC-044 | Resource creation, descriptive editing, activation, and deactivation each commit exactly one corresponding Activity event with actor, action, Resource, server timestamp, and relevant details. Injecting event-write failure for each operation rolls back the entire mutation. Rejected requests and unchanged edit/state submissions produce no new successful-change event. |
 
 ## Rollout / Migration Plan
 
 ### Before implementation
 
-The initial architecture and Delivery 2 contracts already define the implemented foundations. Before each further implementation delivery, review the applicable architecture and task scope, and resolve blocking product ambiguities rather than encoding undocumented assumptions. The proposed Delivery 3 addendum does not itself approve implementation.
+The architecture and Delivery 2/3 task contracts define the implemented foundations, booking creation, and owner cancellation. Before each further implementation delivery, review the applicable architecture and task scope, and resolve blocking product ambiguities rather than encoding undocumented assumptions. The Delivery 4 requirements below do not themselves approve implementation.
 
 ### First implementation delivery: foundation only
 
@@ -340,9 +344,9 @@ The first delivery is strictly limited to:
 
 The client reports Delivery 2 complete. Tasks 2A–2C and the current implementation provide booking persistence/invariants, atomic creation and replay, browser booking creation, and populated Jakarta-date resource schedules with derived labels and stable pagination. This documentation change records that context, not new verification evidence or approval of deferred features.
 
-### Proposed Delivery 3 — My Bookings and self-service cancellation
+### Delivery 3 — My Bookings and self-service cancellation
 
-**Status: proposed requirements scope for review; not approval to implement.** This is the next slice of existing FR-008, FR-016–FR-022, and FR-026–FR-027, prompted by baseline section 11.
+**Status: Tasks 3A–3C are implemented in the repository.** The original requirements proposal below records the slice of existing FR-008, FR-016–FR-022, and FR-026–FR-027 prompted by baseline section 11. The subsequent task contracts, not the proposal alone, supplied implementation authority. This documentation update does not re-certify delivery acceptance.
 
 Include:
 
@@ -354,6 +358,25 @@ Include:
 **Exclude:** coordinator cancellation of others' bookings/reason forms, resource management, activity-history UI, early release, rescheduling, deletion, and additional filters/calendar features. Coordinator intervention and activity inspection remain full-v0.1 obligations for later approved deliveries; writing the required cancellation event is not deferred.
 
 Acceptance evidence must cover AC-007–AC-008, AC-025–AC-027 for self-service, AC-034–AC-040, cancellation-specific atomicity/durability under AC-012–AC-013, and authentication/CSRF/timezone/content requirements. Existing Delivery 1/2 verification must continue to pass through `make verify`. The owner-cancellation decision in baseline section 12 and architecture 002 section 4 is approved, including post-start no-op success and Resource → Booking locking. This documentation approval does not authorize implementation; use a separately approved, tracked and committed task contract.
+
+### Delivery 4 — Coordinator Resource management
+
+**Status: requested requirements scope; not approval to implement.** Baseline section 13 activates FR-023–FR-025 and Resource-specific FR-026–FR-027, using the existing browser, security, persistence, and transaction boundaries.
+
+Include:
+
+- Coordinator-only browser creation of non-seeded Resources, name/description editing, activation of inactive Resources, and deactivation of eligible Resources. Integrate new/activated Resources with existing engineer browse/schedule/reservation workflows.
+- Immutable, case-insensitively unique codes; retained Resources, bookings, original booking request data, and history. No Resource deletion.
+- Explained deactivation rejection for every non-cancelled booking ending after fresh authoritative server time, including Upcoming and In use bookings. Ignore Cancelled/ended bookings and allow the exact end boundary when no other booking blocks deactivation. Do not cancel or shorten bookings automatically.
+- The existing shared Resource lock protocol, with real-PostgreSQL evidence that booking creation and deactivation cannot both accept incompatible changes. Preserve creation replay, cancellation, and final-write overlap guarantees.
+- Exactly one atomic Activity event for each actual creation, descriptive edit, activation, or deactivation, with relevant details; complete rollback on required event failure. No successful-change events for rejected requests or unchanged edit/state submissions; retain the seed bootstrap exemption.
+- Server-side coordinator authorization for direct requests, authenticated/CSRF-protected forms, safe plain-text rendering, understandable errors, and non-destructive migrations with narrowly scoped runtime permissions.
+
+**Exclude:** coordinator cross-owner cancellation and reason forms, Activity-history inspection UI, Resource/Booking deletion, early release, rescheduling, maintenance windows, and infrastructure automation. Activity recording is required now; coordinator inspection and intervention remain full-v0.1 obligations for separately scoped deliveries. A coordinator cannot bypass current owner-only cancellation to clear another owner's reservation for deactivation.
+
+Acceptance evidence must cover AC-009–AC-010, Resource mutation rollback/durability under AC-012–AC-013, AC-016, AC-021, AC-028–AC-029, AC-031, and AC-041–AC-044. Demonstrate the coordinator browser lifecycle and engineer use of a newly created Resource. Use controlled time at the end boundary, independent real-database operations for both booking/deactivation lock orders, and event-failure injection for every Resource mutation. Verify immutable/case-insensitive codes, unauthorized direct requests, no-op event counts, plain-text rendering, retained history, and unchanged earlier delivery behavior through `make verify`.
+
+Before affected implementation, settle the Resource text-validation and creation-state form/default contracts identified below. Do not infer arbitrary business restrictions from transport safety limits. Task contracts must identify migration/permission changes without modifying applied migrations or requiring a demonstration reset.
 
 Remaining v0.1 behaviors still require separately approved, reviewable tasks. This PRD does not authorize the deferred rescheduling or maintenance-window change requests.
 
@@ -367,23 +390,23 @@ No feature-flag system, production rollout, or external monitoring service is re
 
 ### Confirmed facts and boundaries
 
-- Delivery 1/2 application code, schemas, contracts, and test seams exist. Task 3A read-only My Bookings is present; cancellation remains unimplemented. The approved cancellation semantics do not themselves authorize the proposed next implementation scope.
+- Delivery 1–3 application code, schemas, task contracts, and test seams exist, including owner cancellation through Booking detail. My Bookings remains a read-only list linking to that detail. Resource management and Activity-history inspection remain unimplemented; this request scopes Delivery 4 but does not authorize code changes.
 - The application history is not tamper-proof against database administrators.
 - The historical Delivery 1 boundary excluded booking creation; Delivery 2 subsequently introduced it.
 - The baseline's introductory concern about forgetting to release resources does not authorize early release; cancellation remains future-only.
-- The latest request aligns with existing v0.1 requirements and does not require an architectural redesign. Coordinator intervention is not removed from v0.1 merely because it is outside this proposed delivery.
+- The latest request aligns with existing v0.1 Resource-management and Activity-recording requirements and does not require an architectural redesign. Coordinator intervention and Activity-history inspection are not removed from v0.1 merely because they are outside Delivery 4.
 - Approved architecture resolves case-insensitive resource-code identity and the bootstrap exemption from product events. Task 2B resolves UTC microsecond request equivalence, Unicode whitespace trimming, exact purpose comparison, and Unicode code-point counting. Task 2C resolves schedule inclusion by Jakarta-day intersection; the implementation documents `start_at ASC, id ASC` with 25-record limit/offset pages.
 
 ### Product details to resolve before affected implementation
 
 1. **Owner-cancellation policy — resolved:** Baseline section 12 approves the strict Confirmed transition boundary, authorized Cancelled no-op success even after original start, retained creation request identity, one cancellation event, Resource → Booking lock order, and deferral of coordinator intervention. Owner cancellation needs no reason. Whether a coordinator must resubmit a reason on a later cross-owner no-op remains a question for the coordinator-intervention delivery, not an owner-cancellation gate.
 2. **My Bookings ordering — implementation default:** Reuse the schedule's `start_at ASC, id ASC` and validated 25-record page-number navigation, or document another stable order with a unique tie-breaker in the approved task. Do not add status filters/search without scope approval. Ordering is not an unresolved client business rule.
-3. **Later resource/intervention text contracts:** Resource name/description limits and cancellation-reason length/whitespace handling remain matters for their affected later deliveries. Do not introduce arbitrary restrictions in self-service cancellation, which needs no reason.
-4. **Later activity presentation:** Activity ordering/pagination and coordinator-view details remain delivery-time choices. They must not delay or weaken atomic recording of the required cancellation event.
+3. **Delivery 4 Resource form contracts — resolve before affected implementation:** Specify Resource name/description validation, including required/empty-value handling, normalization and any length limits, plus the creation form's initial-state/default policy. Do not silently introduce arbitrary domain limits, code patterns, or uppercase-only input. Code immutability/case-insensitive uniqueness, deactivation safety, and atomic Activity recording are already settled. Cancellation-reason validation remains a later intervention decision; owner cancellation needs no reason.
+4. **Later Activity presentation:** Activity ordering/pagination and coordinator-view details remain delivery-time choices. The Delivery 4 request requires recording, not an inspection screen; that screen remains a full-v0.1 obligation. Its deferral must not weaken atomic Resource or Booking event recording.
 
 ### Engineering decisions and delivery risks
 
-- Preserve existing authentication/session protections, timestamp encoding, safe HTTP errors, and creation/replay guarantees. Cancellation must follow Resource → Booking locks, fresh authoritative time, and a same-transaction event. The current runtime role has no Booking UPDATE permission; any needed cancellation capability must be narrowly scoped and migration-managed without granting edits to immutable booking data.
+- Preserve existing authentication/session protections, timestamp encoding, safe HTTP errors, creation/replay guarantees, and cancellation's Resource → Booking locks and atomic event. Migration 004 now grants only cancellation-column Booking UPDATE; architecture 003 records its accepted direct-SQL bypass limitation for this development exercise. Resource writes are not yet permitted. Delivery 4 must introduce narrowly scoped, migration-managed Resource write capabilities without allowing code edits/deletion, Activity edits/deletion, or unrelated privileges; do not silently change the accepted database trust model or add cancellation hardening to this scope.
 - Real concurrent operations and failure injection are required evidence; tests based only on mocks would leave the central correctness guarantees unproven.
 - Preserve development credential safety while making setup reproducible. No actual passwords or tokens are specified in this PRD.
 - Browser compatibility and quantitative performance objectives are unspecified. Any proposed targets are assumptions requiring agreement, not established acceptance requirements.
