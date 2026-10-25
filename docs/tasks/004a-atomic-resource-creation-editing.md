@@ -2,13 +2,13 @@
 
 ## Status and parent delivery
 
-**Draft for human review; not approved for implementation.** Parent: Delivery 4 — Coordinator Resource management. Product decisions D4-001–D4-003 are approved and recorded in [architecture 004](../architecture/004-resource-creation-and-text-contracts.md). Approval of those decisions is not approval to execute this task.
+**Committed draft for human review; not approved for implementation.** Parent: Delivery 4 — Coordinator Resource management. Product decisions D4-001–D4-003 are approved and recorded in [architecture 004](../architecture/004-resource-creation-and-text-contracts.md). Approval of those decisions is not approval to execute this task.
 
-This contract becomes implementation authority only after human task approval, review and commit of the authoritative documents, and the repository's implementation preflight. This documentation-authoring task changes no application behavior.
+This contract becomes implementation authority only after explicit human task approval, review and approval of the authoritative documents as applicable, their Git commitment, and a passing formal repository implementation preflight. Commitment alone supplies neither approval nor a preflight result. Documentation authoring and correction change no application behavior and do not perform implementation preflight.
 
 ## Documentation baseline and authoritative sources
 
-Documentation was prepared against `77605c28782c0b6883d6670d4cc17ce7bf8ff28f`, with a clean working tree before authoring. `AGENTS.md`, the PRD, baseline, architectures 001–003, and Tasks 2A–3C were tracked and committed. Architecture 004 and this contract are new review candidates, not committed implementation prerequisites yet. A future executor must record its actual implementation base and working-tree state; it must not substitute this historical documentation base.
+Documentation was prepared against `77605c28782c0b6883d6670d4cc17ce7bf8ff28f`, with a clean working tree before authoring. `AGENTS.md`, the PRD, baseline, architectures 001–003, and Tasks 2A–3C were tracked and committed. At authoring, architecture 004 and this contract were new, uncommitted review candidates; their reviewed versions are now committed at `a4f820054aa3f20f03fd56be490b469e0165bb25`. That commitment is not evidence of explicit human task approval or a passing formal implementation preflight. A future executor must record its actual implementation base and working-tree state; it must not substitute this historical documentation base.
 
 Read these sources completely, including their endings and applicable references:
 
@@ -94,7 +94,12 @@ The approved client decisions in architecture 004 resolve Resource text/initial-
 | NFR-007–NFR-008; FR-015, FR-021; AC-013, AC-030, AC-033, AC-040 | Non-destructive migration/seed/restart lifecycle, durable Resource and Activity changes, unchanged Booking retention and creation/cancellation replay. |
 | NFR-005–NFR-006, NFR-010–NFR-011; AC-032 | Existing local isolated stack, single `make verify` entry point, controlled time, independent real-database concurrency, evidence report and separate-session independent review. |
 
-**Explicitly deferred, not dropped:** FR-024–FR-025 and AC-009–AC-010/AC-029 (existing-Resource deactivation eligibility and booking/deactivation races); existing-Resource activation; FR-029/NFR-009 and the new Resource-management browser portions of AC-016/AC-028/AC-041; coordinator cross-owner cancellation under FR-019–FR-020/AC-024; Activity inspection under FR-028. No Task 4B or Task 4C implementation is authorized by this contract.
+**Explicitly deferred within Delivery 4, not dropped:**
+
+- **Task 4B:** Existing-Resource activation/deactivation; state-transition service and database operations; fresh-time occupancy validation; Resource locking and concurrency for those transitions; corresponding atomic Activity recording; service/database verification. This includes FR-024–FR-025 and AC-009–AC-010/AC-029 (deactivation eligibility and booking/deactivation races), plus the state-transition portions of FR-023/FR-026–FR-027 and AC-028/AC-041/AC-044.
+- **Task 4C:** Coordinator Resource-management browser navigation; Resource creation/edit/state forms; HTTP authorization and CSRF/Origin protection; safe outcomes and redirects; browser integration and acceptance. This includes FR-029/NFR-009 and the Resource-management browser portions of AC-016/AC-028/AC-041.
+
+These assignments record intended downstream responsibility only; neither Task 4B nor Task 4C is approved or authorized for implementation by this contract. Coordinator cross-owner cancellation under FR-019–FR-020/AC-024 and Activity-history inspection under FR-028 remain outside Delivery 4, for separately scoped deliveries.
 
 ## Architectural constraints
 

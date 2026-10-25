@@ -1,6 +1,6 @@
 # 004 — Resource creation and text contracts
 
-- **Status:** Product decisions D4-001, D4-002, and D4-003 approved by the fictional client in the Delivery 4 documentation-authoring request. This ADR records those approvals; the authored documentation awaits human review and commit. It does not authorize application implementation.
+- **Status:** Product decisions D4-001, D4-002, and D4-003 approved by the fictional client in the Delivery 4 documentation-authoring request. This ADR records those approvals. At authoring, this ADR and Task 4A awaited human review and commit; their reviewed versions are now committed at `a4f820054aa3f20f03fd56be490b469e0165bb25`. Git commitment does not constitute explicit human document/task approval or a passing formal implementation preflight. This documentation-only correction supplies neither gate and does not authorize application implementation.
 - **Product authority:** [PRD](../prd.md), especially FR-005, FR-023, FR-026–FR-027, AC-028, and AC-041–AC-044; [baseline section 13](../baseline.md#13-delivery-4-client-request--resource-management); the three explicit client decisions reproduced below.
 - **Architectural authority:** Extends [architecture 001](001-initial-architecture.md), particularly sections 2, 7, 9, 10, and 15. Preserves [architecture 002](002-my-bookings-and-cancellation.md) and the narrowly bounded limitation in [architecture 003](003-cancellation-privilege-boundary.md).
 - **Related contract:** [Task 4A — Atomic Resource creation and descriptive editing](../tasks/004a-atomic-resource-creation-editing.md), a draft requiring separate implementation approval.
@@ -94,10 +94,15 @@ Architecture 003 accepts a development-only bypass for existing Booking cancella
 
 Task 4A covers internal Coordinator creation, descriptive editing, validation, immutable codes, initial state, no-op behavior, atomic history, and minimal database capabilities. Its contract requires real-PostgreSQL authorization, uniqueness/concurrency, rollback, permissions, migration, retention, restart, and regression evidence through the existing verification infrastructure.
 
-Existing-Resource activation/deactivation, deactivation eligibility/races, all Resource-management HTTP routes/forms, coordinator cross-owner cancellation, Activity-history UI, deletion, Booking mutation, and new infrastructure remain outside Task 4A. The full Delivery 4 browser/state requirements remain obligations for separately approved tasks; this ADR and Task 4A do not authorize Task 4B or Task 4C implementation.
+Existing-Resource activation/deactivation, deactivation eligibility/races, and all Resource-management HTTP routes/forms remain outside Task 4A. The intended downstream ownership is:
+
+- **Task 4B:** Existing-Resource activation/deactivation; state-transition service and database operations; fresh-time occupancy validation; Resource locking and concurrency for those transitions; corresponding atomic Activity recording; service/database verification.
+- **Task 4C:** Coordinator Resource-management browser navigation; Resource creation/edit/state forms; HTTP authorization and CSRF/Origin protection; safe outcomes and redirects; browser integration and acceptance.
+
+The full Delivery 4 browser/state requirements remain obligations for separately approved tasks; this ADR and Task 4A do not approve or authorize Task 4B or Task 4C implementation. Coordinator cross-owner cancellation and Activity-history inspection remain outside Delivery 4. Deletion, Booking mutation, and new infrastructure remain outside Task 4A.
 
 ## 7. Decision authority and review boundary
 
 D4-001–D4-003 are resolved product decisions, not remaining questions for an implementation agent. No unresolved Level 2 decision is identified for the bounded Task 4A design. Internal package/API shape, safe helper design, event detail encoding, deterministic test seams, and non-destructive migration details retain Level 1 discretion within existing architecture and the task contract.
 
-Human review/commit of these documents and separate task approval remain prerequisites to implementation. Neither this ADR nor successful documentation checks certify application behavior, grant final acceptance, or authorize commit, push, merge, deployment, or credential changes.
+Human review and approval of these documents as applicable, separate explicit Task 4A implementation approval, and a passing formal implementation preflight remain prerequisites to implementation. The reviewed documents' Git commitment is recorded above and does not satisfy those approval/preflight gates. Neither this ADR nor successful documentation checks certify application behavior, grant final acceptance, or authorize commit, push, merge, deployment, or credential changes.
