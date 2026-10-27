@@ -410,11 +410,37 @@ func TestBookingMigrationPreservesFoundationRows(t *testing.T) {
 		t.Fatalf("record foundation migration: %v", err)
 	}
 
-	if err := Migrate(ctx, upgradePool); err != nil {
-		t.Fatalf("apply booking migration to existing foundation data: %v", err)
+	var migrationsThrough004 []migrationChecksum
+	for _, migration := range migrations {
+		if migration.version == requiredSchemaVersion {
+			break
+		}
+		migrationsThrough004 = append(migrationsThrough004, migration)
+		if migration.version == foundation.version {
+			continue
+		}
+		migrationTx, err := upgradePool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin migration %s: %v", migration.version, err)
+		}
+		if _, err := migrationTx.Exec(ctx, string(migration.contents)); err != nil {
+			_ = migrationTx.Rollback(ctx)
+			t.Fatalf("apply migration %s to existing foundation data: %v", migration.version, err)
+		}
+		if _, err := migrationTx.Exec(ctx, `
+			INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)`, migration.version, migration.checksum); err != nil {
+			_ = migrationTx.Rollback(ctx)
+			t.Fatalf("record migration %s: %v", migration.version, err)
+		}
+		if err := migrationTx.Commit(ctx); err != nil {
+			t.Fatalf("commit migration %s: %v", migration.version, err)
+		}
 	}
-	if err := CheckSchema(ctx, upgradePool); err != nil {
-		t.Fatalf("check upgraded schema: %v", err)
+	if len(migrationsThrough004) != 4 {
+		t.Fatalf("migrations through Booking cancellation = %d, want 4", len(migrationsThrough004))
+	}
+	if err := validateMigrationLedger(ctx, upgradePool, migrationsThrough004, true); err != nil {
+		t.Fatalf("validate pre-Resource-capability migration ledger: %v", err)
 	}
 	var login, displayName, code, name, description string
 	if err := upgradePool.QueryRow(ctx, `
