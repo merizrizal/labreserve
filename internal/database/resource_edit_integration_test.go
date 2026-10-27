@@ -1,6 +1,7 @@
 package database
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -141,6 +142,118 @@ func TestResourceEditingPersistsDescriptiveValuesAndPreservesBookings(t *testing
 		}
 	}
 	assertBookingRequestCounts(t, adminPool, fixtures.coordinator, bookingRequest.RequestID, 1, 1)
+}
+
+func TestResourceEditingCanonicalEquivalentRetainedUnicodeWhitespaceIsNoOp(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		retainedEdge  string
+		submittedEdge string
+	}{
+		{name: "em-space", retainedEdge: "\u2003", submittedEdge: "\u00a0"},
+		{name: "no-break-space", retainedEdge: "\u00a0", submittedEdge: "\u2003"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adminPool, appPool, fixtures := resourceCreationSetup(t)
+			now := time.Date(2040, time.January, 2, 3, 4, 5, 123456000, time.UTC)
+			service := resources.NewService(NewStore(appPool), func() time.Time { return now })
+			created, err := service.Create(t.Context(), resources.Actor{AccountID: fixtures.coordinator}, resources.CreateRequest{
+				Code: "Retained-whitespace-" + strings.ReplaceAll(testDatabaseUUID(t, adminPool), "-", ""),
+				Name: "Original Lab", Description: "Original description", Active: true,
+			})
+			if err != nil {
+				t.Fatalf("create retained-whitespace fixture: %v", err)
+			}
+			fixtures.trackResource(created.Resource.ID)
+
+			bookingRequest := bookings.CreateRequest{
+				ResourceID: created.Resource.ID, RequestID: testDatabaseUUID(t, adminPool),
+				StartAt: now.Add(time.Hour), EndAt: now.Add(2 * time.Hour), Purpose: "retained relation",
+			}
+			booking, err := bookings.NewService(NewStore(appPool), func() time.Time { return now }).Create(
+				t.Context(), bookings.Actor{AccountID: fixtures.coordinator}, bookingRequest)
+			if err != nil {
+				t.Fatalf("create retained Booking relation: %v", err)
+			}
+			cleanupResourceBookingFixture(t, adminPool, booking.Booking.ID)
+			bookingsBefore, bookingEventsBefore := resourceBookingAndEventSnapshot(t, adminPool, created.Resource.ID)
+
+			now = now.Add(time.Minute)
+			changed, err := service.Edit(t.Context(), resources.Actor{AccountID: fixtures.coordinator}, resources.EditRequest{
+				ResourceID: created.Resource.ID, Code: created.Resource.Code,
+				Name: "Changed Lab", Description: "Changed description",
+			})
+			if err != nil || !changed.Changed {
+				t.Fatalf("genuine descriptive change result=%+v error=%v", changed, err)
+			}
+			eventsAfterChange := readResourceCapabilityEvents(t, adminPool, created.Resource.ID)
+			if len(eventsAfterChange) != 2 || eventsAfterChange[1].Action != "resource.descriptive_edited" ||
+				eventsAfterChange[1].Details["before"].(map[string]any)["name"] != created.Resource.Name ||
+				eventsAfterChange[1].Details["after"].(map[string]any)["name"] != changed.Resource.Name {
+				t.Fatalf("genuine change did not create exactly one accurate Activity: %+v", eventsAfterChange)
+			}
+
+			retainedName := test.retainedEdge + changed.Resource.Name + test.retainedEdge
+			retainedDescription := test.retainedEdge + changed.Resource.Description + test.retainedEdge
+			retainedUpdatedAt := now.Add(time.Minute)
+			if _, err := adminPool.Exec(t.Context(), `
+				UPDATE public.resources SET name = $2, description = $3, updated_at = $4
+				WHERE id = $1::uuid`, created.Resource.ID, retainedName, retainedDescription, retainedUpdatedAt); err != nil {
+				t.Fatalf("prepare retained legacy edge whitespace: %v", err)
+			}
+			expected := changed.Resource
+			expected.Name, expected.Description, expected.UpdatedAt = retainedName, retainedDescription, retainedUpdatedAt
+			installResourceUpdateFailureTrigger(t, adminPool, created.Resource.ID)
+			installResourceActivityFailureTrigger(t, adminPool, fixtures.coordinator, "resource.descriptive_edited")
+
+			submittedName := test.submittedEdge + changed.Resource.Name + test.submittedEdge
+			submittedDescription := test.submittedEdge + changed.Resource.Description + test.submittedEdge
+			if strings.TrimSpace(submittedName) != strings.TrimSpace(retainedName) ||
+				strings.TrimSpace(submittedDescription) != strings.TrimSpace(retainedDescription) {
+				t.Fatal("Go Unicode trimming disagrees for the retained/submitted edge-whitespace cases")
+			}
+			request := resources.EditRequest{
+				ResourceID: created.Resource.ID, Code: created.Resource.Code,
+				Name: submittedName, Description: submittedDescription,
+			}
+			if _, err := service.Edit(t.Context(), resources.Actor{AccountID: fixtures.engineer}, request); !errors.Is(err, resources.ErrForbidden) {
+				t.Fatalf("unauthorized canonical-equivalent edit error = %v, want forbidden", err)
+			}
+			result, err := service.Edit(t.Context(), resources.Actor{AccountID: fixtures.coordinator}, request)
+			if err != nil || result.Changed || result.Resource.ID != expected.ID || result.Resource.Code != expected.Code ||
+				result.Resource.Name != expected.Name || result.Resource.Description != expected.Description ||
+				result.Resource.Active != expected.Active || !result.Resource.CreatedAt.Equal(expected.CreatedAt) ||
+				!result.Resource.UpdatedAt.Equal(expected.UpdatedAt) {
+				t.Fatalf("Coordinator canonical-equivalent edit result=%+v error=%v, want unchanged raw retained Resource %+v", result, err, expected)
+			}
+
+			var persistedID, persistedCode string
+			var persistedName, persistedDescription []byte
+			var persistedActive bool
+			var persistedCreatedAt, persistedUpdatedAt time.Time
+			if err := adminPool.QueryRow(t.Context(), `
+				SELECT id::text, code, convert_to(name, 'UTF8'), convert_to(description, 'UTF8'),
+				       active, created_at, updated_at
+				FROM public.resources WHERE id = $1::uuid`, created.Resource.ID).Scan(
+				&persistedID, &persistedCode, &persistedName, &persistedDescription,
+				&persistedActive, &persistedCreatedAt, &persistedUpdatedAt); err != nil {
+				t.Fatalf("read retained Resource bytes after no-op: %v", err)
+			}
+			if persistedID != expected.ID || persistedCode != expected.Code ||
+				!bytes.Equal(persistedName, []byte(expected.Name)) || !bytes.Equal(persistedDescription, []byte(expected.Description)) ||
+				persistedActive != expected.Active || !persistedCreatedAt.Equal(expected.CreatedAt) ||
+				!persistedUpdatedAt.Equal(retainedUpdatedAt) {
+				t.Fatalf("canonical no-op changed persisted Resource bytes/identity/state/times: id=%s code=%q name=%q description=%q active=%v created=%s updated=%s",
+					persistedID, persistedCode, persistedName, persistedDescription, persistedActive, persistedCreatedAt, persistedUpdatedAt)
+			}
+			eventsAfterNoOp := readResourceCapabilityEvents(t, adminPool, created.Resource.ID)
+			bookingsAfter, bookingEventsAfter := resourceBookingAndEventSnapshot(t, adminPool, created.Resource.ID)
+			if len(eventsAfterNoOp) != 2 || eventsAfterNoOp[1].Action != "resource.descriptive_edited" ||
+				bookingsBefore != bookingsAfter || bookingEventsBefore != bookingEventsAfter {
+				t.Fatalf("canonical no-op added Activity or changed retained Booking relationships/history: events=%+v", eventsAfterNoOp)
+			}
+		})
+	}
 }
 
 func TestResourceEditingPersistsLongDescriptiveTextWithoutProductLengthCaps(t *testing.T) {

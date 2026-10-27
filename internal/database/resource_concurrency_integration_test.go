@@ -419,6 +419,83 @@ func TestConcurrentCanonicalResourceEditsProduceOneMutationAndOneNoOp(t *testing
 	}
 }
 
+func TestConcurrentCanonicalResourceEditRetainedWhitespaceNoOpAfterLockWait(t *testing.T) {
+	adminPool, appPool, fixtures := resourceCreationSetup(t)
+	clock := &resourceOperationClock{}
+	base := time.Date(2040, time.January, 2, 3, 4, 5, 0, time.UTC)
+	clock.Set(base)
+	service := resources.NewService(NewStore(appPool), clock.Now)
+	created, err := service.Create(t.Context(), resources.Actor{AccountID: fixtures.coordinator}, resources.CreateRequest{
+		Code: "Retained-lock-wait-" + strings.ReplaceAll(testDatabaseUUID(t, adminPool), "-", ""),
+		Name: "Locked Lab", Description: "Locked description", Active: true,
+	})
+	if err != nil {
+		t.Fatalf("create retained lock-wait Resource: %v", err)
+	}
+	fixtures.trackResource(created.Resource.ID)
+
+	retainedName := "\u2003" + created.Resource.Name + "\u2003"
+	retainedDescription := "\u00a0" + created.Resource.Description + "\u00a0"
+	retainedUpdatedAt := base.Add(time.Minute)
+	if _, err := adminPool.Exec(t.Context(), `
+		UPDATE public.resources SET name = $2, description = $3, updated_at = $4
+		WHERE id = $1::uuid`, created.Resource.ID, retainedName, retainedDescription, retainedUpdatedAt); err != nil {
+		t.Fatalf("prepare retained lock-wait whitespace: %v", err)
+	}
+	installResourceUpdateFailureTrigger(t, adminPool, created.Resource.ID)
+	installResourceActivityFailureTrigger(t, adminPool, fixtures.coordinator, "resource.descriptive_edited")
+
+	clock.Set(base.Add(time.Hour))
+	callsBeforeWait := clock.calls.Load()
+	held := holdBookingResourceLock(t, adminPool, created.Resource.ID)
+	edit := startResourceEdit(t.Context(), service, fixtures.coordinator, resources.EditRequest{
+		ResourceID: created.Resource.ID, Code: created.Resource.Code,
+		Name:        "\u00a0" + created.Resource.Name + "\u00a0",
+		Description: "\u2003" + created.Resource.Description + "\u2003",
+	})
+	waitCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	if err := waitForBlockedBookingCalls(waitCtx, adminPool, held.pid, 1); err != nil {
+		cancel()
+		_ = held.release()
+		t.Fatalf("canonical-equivalent edit did not wait for the Resource lock: %v", err)
+	}
+	cancel()
+	if clock.calls.Load() != callsBeforeWait {
+		_ = held.release()
+		t.Fatalf("edit clock was read before the retained Resource lock: before=%d while waiting=%d", callsBeforeWait, clock.calls.Load())
+	}
+	if err := held.release(); err != nil {
+		t.Fatalf("release retained Resource lock: %v", err)
+	}
+	result := receiveResourceEdit(t, edit)
+	if result.err != nil || result.result.Changed || result.result.Resource.ID != created.Resource.ID ||
+		result.result.Resource.Code != created.Resource.Code || result.result.Resource.Name != retainedName ||
+		result.result.Resource.Description != retainedDescription || !result.result.Resource.Active ||
+		!result.result.Resource.CreatedAt.Equal(created.Resource.CreatedAt) || !result.result.Resource.UpdatedAt.Equal(retainedUpdatedAt) {
+		t.Fatalf("post-lock canonical-equivalent edit = %+v, error=%v", result.result, result.err)
+	}
+	if clock.calls.Load() != callsBeforeWait+1 {
+		t.Fatalf("post-lock no-op clock calls = %d, want one", clock.calls.Load()-callsBeforeWait)
+	}
+	var storedName, storedDescription []byte
+	var storedUpdatedAt time.Time
+	if err := adminPool.QueryRow(t.Context(), `
+		SELECT convert_to(name, 'UTF8'), convert_to(description, 'UTF8'), updated_at
+		FROM public.resources WHERE id = $1::uuid`, created.Resource.ID).Scan(
+		&storedName, &storedDescription, &storedUpdatedAt); err != nil {
+		t.Fatalf("read retained Resource after concurrent no-op: %v", err)
+	}
+	if string(storedName) != retainedName || string(storedDescription) != retainedDescription ||
+		!storedUpdatedAt.Equal(retainedUpdatedAt) {
+		t.Fatalf("lock-wait no-op changed retained text/timestamp: name=%q description=%q updated=%s",
+			storedName, storedDescription, storedUpdatedAt)
+	}
+	events := readResourceCapabilityEvents(t, adminPool, created.Resource.ID)
+	if len(events) != 1 || events[0].Action != "resource.created" {
+		t.Fatalf("lock-wait no-op inserted Resource Activity: %+v", events)
+	}
+}
+
 func cleanupResourceBookingFixture(t *testing.T, adminPool *pgxpool.Pool, bookingID string) {
 	t.Helper()
 	t.Cleanup(func() {

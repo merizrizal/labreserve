@@ -132,7 +132,8 @@ BEGIN
         RETURN;
     END IF;
 
-    IF v_resource.name = p_name AND v_resource.description = p_description THEN
+    IF pg_catalog.btrim(v_resource.name, v_edge_whitespace) = p_name
+       AND pg_catalog.btrim(v_resource.description, v_edge_whitespace) = p_description THEN
         RETURN QUERY
         SELECT v_resource.id, v_resource.code, v_resource.name, v_resource.description,
                v_resource.active, v_resource.created_at, v_resource.updated_at, FALSE;
