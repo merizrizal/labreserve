@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,8 +17,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"labreserve.local/labreserve/internal/auth"
+	"labreserve.local/labreserve/internal/bookings"
 	"labreserve.local/labreserve/internal/config"
 	"labreserve.local/labreserve/internal/database"
+	"labreserve.local/labreserve/internal/resources"
 )
 
 var csrfPattern = regexp.MustCompile(`name="_csrf" value="([^"]+)"`)
@@ -196,6 +199,116 @@ func TestFoundationHTTPAuthenticationAndResourceBrowsing(t *testing.T) {
 	coordinatorBody := readAndClose(t, response)
 	if !strings.Contains(coordinatorBody, "Jordan Lee") || !strings.Contains(coordinatorBody, "(coordinator)") {
 		t.Fatal("coordinator identity or role was not derived from the seeded account")
+	}
+
+	coordinatorURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinatorCookie := findCookie(t, coordinatorJar.Cookies(coordinatorURL), sessionCookieName)
+	coordinatorSession, found, err := authentication.Resolve(context.Background(), coordinatorCookie.Value)
+	if err != nil || !found || coordinatorSession.Identity == nil || coordinatorSession.Identity.Role != database.RoleCoordinator {
+		t.Fatalf("resolve trusted Coordinator session for Resource service: found=%v session=%+v error=%v", found, coordinatorSession, err)
+	}
+	resourceNow := time.Date(2040, time.January, 2, 3, 4, 5, 0, time.UTC)
+	resourceService := resources.NewService(store, func() time.Time { return resourceNow })
+	resourceCode := fmt.Sprintf("SESSION-AUTH-%d", time.Now().UnixNano())
+	created, err := resourceService.Create(context.Background(), resources.Actor{AccountID: coordinatorSession.Identity.ID}, resources.CreateRequest{
+		Code: resourceCode, Name: "Resolved Coordinator Resource", Active: true,
+	})
+	if err != nil {
+		t.Fatalf("create Resource from trusted session identity: %v", err)
+	}
+	var bookingRequestID string
+	if err := migrationPool.QueryRow(context.Background(), "SELECT gen_random_uuid()::text").Scan(&bookingRequestID); err != nil {
+		t.Fatalf("generate existing-flow Booking request identity: %v", err)
+	}
+	bookingRequest := bookings.CreateRequest{
+		ResourceID: created.Resource.ID, RequestID: bookingRequestID,
+		StartAt: resourceNow.Add(4 * time.Hour), EndAt: resourceNow.Add(5 * time.Hour), Purpose: "retained after Resource edit",
+	}
+	createdBooking, err := bookings.NewService(store, func() time.Time { return resourceNow }).Create(
+		context.Background(), bookings.Actor{AccountID: coordinatorSession.Identity.ID}, bookingRequest)
+	if err != nil || createdBooking.Replayed {
+		t.Fatalf("create Booking through existing service for Resource read-path checks: result=%+v error=%v", createdBooking, err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := migrationPool.Exec(cleanupCtx, "DELETE FROM activity_events WHERE booking_id = $1::uuid", createdBooking.Booking.ID); err != nil {
+			t.Errorf("delete service-created Resource Booking events: %v", err)
+		}
+		if _, err := migrationPool.Exec(cleanupCtx, "DELETE FROM bookings WHERE id = $1::uuid", createdBooking.Booking.ID); err != nil {
+			t.Errorf("delete service-created Resource Booking: %v", err)
+		}
+		if _, err := migrationPool.Exec(cleanupCtx, "DELETE FROM activity_events WHERE resource_id = $1::uuid", created.Resource.ID); err != nil {
+			t.Errorf("delete trusted-session Resource event: %v", err)
+		}
+		if _, err := migrationPool.Exec(cleanupCtx, "DELETE FROM resources WHERE id = $1::uuid", created.Resource.ID); err != nil {
+			t.Errorf("delete trusted-session Resource: %v", err)
+		}
+	})
+	var eventActor string
+	if err := migrationPool.QueryRow(context.Background(), `
+		SELECT actor_account_id::text FROM activity_events WHERE resource_id = $1::uuid AND action = 'resource.created'`,
+		created.Resource.ID).Scan(&eventActor); err != nil || eventActor != coordinatorSession.Identity.ID {
+		t.Fatalf("Resource creation Activity actor=%q error=%v, want authenticated session identity %q", eventActor, err, coordinatorSession.Identity.ID)
+	}
+
+	resourceNow = resourceNow.Add(time.Minute)
+	const htmlName = `<script>service-resource-name</script>`
+	const htmlDescription = `<img src=x onerror="alert(2)">`
+	edited, err := resourceService.Edit(context.Background(), resources.Actor{AccountID: coordinatorSession.Identity.ID}, resources.EditRequest{
+		ResourceID: created.Resource.ID, Code: created.Resource.Code, Name: htmlName, Description: htmlDescription,
+	})
+	if err != nil || !edited.Changed {
+		t.Fatalf("edit Resource from trusted Coordinator session identity: result=%+v error=%v", edited, err)
+	}
+	stored, found, err := store.ResourceByID(context.Background(), created.Resource.ID)
+	if err != nil || !found || stored.Name != htmlName || stored.Description != htmlDescription {
+		t.Fatalf("service did not retain exact HTML-like plain text: found=%v resource=%+v error=%v", found, stored, err)
+	}
+	response = mustGet(t, coordinatorClient, server.URL+"/resources/"+created.Resource.ID+"?date=2040-01-02")
+	serviceXSSBody := readAndClose(t, response)
+	if response.StatusCode != http.StatusOK || !strings.Contains(serviceXSSBody, createdBooking.Booking.ID) ||
+		strings.Contains(serviceXSSBody, htmlName) || strings.Contains(serviceXSSBody, htmlDescription) ||
+		!strings.Contains(serviceXSSBody, "&lt;script&gt;service-resource-name&lt;/script&gt;") ||
+		!strings.Contains(serviceXSSBody, "&lt;img src=x onerror=&#34;alert(2)&#34;&gt;") {
+		t.Fatalf("service-created HTML-like Resource text or retained Booking was not safely displayed: status=%d body=%s", response.StatusCode, serviceXSSBody)
+	}
+	response = mustGet(t, coordinatorClient, server.URL+"/resources")
+	serviceListBody := readAndClose(t, response)
+	if response.StatusCode != http.StatusOK || !strings.Contains(serviceListBody, resourceCode) ||
+		!strings.Contains(serviceListBody, "&lt;script&gt;service-resource-name&lt;/script&gt;") ||
+		!strings.Contains(serviceListBody, "&lt;img src=x onerror=&#34;alert(2)&#34;&gt;") {
+		t.Fatalf("service-created Resource was not safely retained in the existing list: status=%d body=%s", response.StatusCode, serviceListBody)
+	}
+	response = mustGet(t, coordinatorClient, server.URL+"/bookings/"+createdBooking.Booking.ID)
+	serviceBookingBody := readAndClose(t, response)
+	if response.StatusCode != http.StatusOK || !strings.Contains(serviceBookingBody, "&lt;script&gt;service-resource-name&lt;/script&gt;") {
+		t.Fatalf("Booking detail did not show updated Resource context after edit: status=%d body=%s", response.StatusCode, serviceBookingBody)
+	}
+	response = mustGet(t, coordinatorClient, server.URL+"/my-bookings")
+	serviceMyBookingsBody := readAndClose(t, response)
+	if response.StatusCode != http.StatusOK || !strings.Contains(serviceMyBookingsBody, createdBooking.Booking.ID) ||
+		!strings.Contains(serviceMyBookingsBody, "&lt;script&gt;service-resource-name&lt;/script&gt;") {
+		t.Fatalf("My Bookings did not retain updated Resource context after edit: status=%d body=%s", response.StatusCode, serviceMyBookingsBody)
+	}
+
+	revokedSession, revokedFound, err := authentication.Resolve(context.Background(), authenticatedCookie.Value)
+	if err != nil || revokedFound || revokedSession.Identity != nil {
+		t.Fatalf("revoked Engineer session still resolves: found=%v session=%+v error=%v", revokedFound, revokedSession, err)
+	}
+	staleCode := resourceCode + "-STALE"
+	if _, err := resourceService.Create(context.Background(), resources.Actor{}, resources.CreateRequest{
+		Code: staleCode, Name: "Revoked session attempt",
+	}); !errors.Is(err, resources.ErrUnauthenticated) {
+		t.Fatalf("missing actor after revoked session = %v, want unauthenticated", err)
+	}
+	var staleResources int
+	if err := migrationPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM resources WHERE code = $1`, staleCode).Scan(&staleResources); err != nil || staleResources != 0 {
+		t.Fatalf("revoked session attempt persisted %d Resources, error=%v", staleResources, err)
 	}
 }
 
