@@ -412,7 +412,7 @@ func TestBookingMigrationPreservesFoundationRows(t *testing.T) {
 
 	var migrationsThrough004 []migrationChecksum
 	for _, migration := range migrations {
-		if migration.version == requiredSchemaVersion {
+		if migration.version == resourceCapabilityMigrationVersion {
 			break
 		}
 		migrationsThrough004 = append(migrationsThrough004, migration)
