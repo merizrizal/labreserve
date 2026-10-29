@@ -1,67 +1,80 @@
 # Task 4B — Chunk 3 to Chunk 4 Handoff
 
-**Status: CONTINUABLE.** Chunk 3 exit conditions passed. This handoff records the activation vertical slice only; Chunk 4 has not started, Task 4B is incomplete, and no full Task 4B acceptance is claimed.
+**Status: CONTINUABLE.** Chunk 3 exit criteria were met in its implementation session; the candidate is now committed. Chunk 4 has not started, Task 4B remains incomplete, and this handoff does not authorize the next chunk.
 
-## Task, authorization, and source identity
+**Handoff mode:** `ENGINEERING_CHUNK_HANDOFF`, refreshed after commit.
+**Paired next-session instruction:** [`instruction-chunk-4-task-004b-atomic-resource-activation-deactivation.md`](instruction-chunk-4-task-004b-atomic-resource-activation-deactivation.md) — `PREPARED_NOT_AUTHORIZED`.
 
-- **Approved task:** `docs/tasks/004b-atomic-resource-activation-deactivation.md`
-- **Task SHA-256:** `43e5644a4065fedf26685c2382c3239ca7c1e10e200ea6c71d10a8e803c7b49a` (matches the approved committed blob and the Chunk 2 handoff).
-- **Controlling plan:** `docs/implementation-plan/004b-atomic-resource-activation-deactivation.md`
-- **Current plan SHA-256:** `27a0bd146930680355b7557f9471c4df4b025b025418adaaf49a4f54b48fd49f` (matches the corrected current fingerprint in the Chunk 2 handoff).
-- **Original plan SHA-256 at implementation base:** `aa02f5d8a6dd0e5f741dbfe3b4241ae4ed642d3eb778f3a632de2ebc66317c8b`; independently recomputed from `61e7d010205f24478654a1b37e47ae75aec14c76`. The complete plan delta from that base remains only the three documented absolute-path redactions. No objective, scope, dependency, verification, or exit-condition change was found.
-- **Preflight:** `PREFLIGHT_PASS`, tied to the committed Task 4B contract and approved implementation base; no material source/specification drift found.
+## 1. Task, source and candidate identity
+
+- **Task:** `docs/tasks/004b-atomic-resource-activation-deactivation.md`
+- **Observed task SHA-256:** `43e5644a4065fedf26685c2382c3239ca7c1e10e200ea6c71d10a8e803c7b49a`.
+- **Sole controlling plan:** `docs/implementation-plan/004b-atomic-resource-activation-deactivation.md`
+- **Observed current plan SHA-256:** `27a0bd146930680355b7557f9471c4df4b025b025418adaaf49a4f54b48fd49f`.
 - **Original approved implementation base:** `61e7d010205f24478654a1b37e47ae75aec14c76`.
-- **Current branch / HEAD:** `feat/004b-resource-activation-deactivation` / `bd231b22ed18e41942ef2001bec71dca6d15ffe4`.
-- The task and plan are tracked and committed. Migrations 001–005 match their accepted source hashes; Migration 006 matches the accepted Chunk 2 file hash. Exact hashes are recorded below.
+- **Committed Chunk 3 candidate:** `19566eeea5ec33944fba3740bf00ff54f0450b8c`, parent `bd231b22ed18e41942ef2001bec71dca6d15ffe4`.
+- **Observed branch:** `feat/004b-resource-activation-deactivation`; the branch and its `origin` tracking ref pointed to `19566ee` at inspection.
+- **Commit contents observed:** 14 files, 2,149 insertions and 13 deletions. It contains the accepted Task 4B Chunk 1–3 implementation/tests, Migration 006 and its tests, verification updates, and the three chunk handoffs. The commit subject is `feat(resources): add guarded activation state service`.
+- At the start of this post-commit handoff refresh, `git status --porcelain=v1` was empty at `19566ee`. This documentation update creates the only working-tree delta: this existing handoff is modified and the paired instruction is new/untracked. No implementation source, tests, migration, or configuration was changed; nothing was staged or committed during this refresh.
+- The task and plan are tracked/committed and their current hashes match the previously recorded values. The plan hash at the original base is `aa02f5d8a6dd0e5f741dbfe3b4241ae4ed642d3eb778f3a632de2ebc66317c8b`; the documented difference is three path redactions, with no change to scope, requirements, ladder, or exit criteria.
+- **Preflight provenance:** `PREFLIGHT_PASS` was reported for the Task 4B implementation source/base before Chunk 3. This refresh re-read the complete current Task 4B contract and controlling plan and measured their hashes; it did not run an implementation preflight for Chunk 4. A new session must revalidate its own authority, base and preflight gate.
+- The committed handoff version immediately before this refresh had SHA-256 `633bd54d9c4b4fba0a352e6b966029a4a86cea73e469e22656bbd4b5252e168a`. It described the same candidate while still in the pre-commit dirty state. That historical blob remains available in Git; this working copy corrects the candidate/commit status without rewriting history.
 
-## Execution policy and candidate state
+## 2. Execution mode and authorization
 
-- **Mode:** single-chunk; Chunk 3 only. No continuous loop.
-- **Authorization:** explicit human authorization covered Chunk 3 only. The Chunk 3-to-4 handoff was explicitly authorized. Neither this handoff nor the previous authorization starts Chunk 4 automatically.
-- **Retry policy:** two failed validation attempts per issue. Chunk 2's earlier fixture-typing issue used one failed attempt and was fixed with explicit casts. In Chunk 3, one focused unit run failed because the fake-repository test expected zero `BeginResourceStateChange` invocations when begin returned an error; the expectation was corrected to one invocation and the rerun passed. These are distinct resolved issues; neither issue's history is reset. No other validation attempt failed. The initially over-anchored broad regression selector passed but selected only its exact Booking test; discovery exposed the narrower selection, and a corrected prefix selector then discovered and ran the intended set. This was a selector correction, not a failed validation.
-- **Working tree:** dirty by design from accepted earlier chunks. No staged changes; no implementation commit, push, merge, deployment, or credential changes.
-- **Protected prior work preserved:** Chunk 1 fail-closed service contract; Chunk 2 Migration 006, guarded capability, migration adaptations, direct capability tests, and both earlier handoffs. Migrations 001–005 and Migration 006 were not edited in Chunk 3.
-- **Disposable database:** used only Compose project `labreserve-verify`, against `labreserve_test` with the actual `labreserve_app` runtime pool for application operations. The project was absent before setup. Its PostgreSQL 17.7 container, volume, and network were removed after testing; no persistent/demo target was accessed. `.env` was neither read nor modified.
+- Chunk 3 was executed in **SINGLE-CHUNK** mode. The prior user request explicitly authorized Chunk 3 and its handoff; it did not authorize Chunk 4.
+- The current user request authorizes updating this handoff after commit. The paired instruction is only a prepared continuation packet. **Chunk 4 authorization is NOT GRANTED by this handoff or instruction.**
+- The Task 4B document itself is a bounded contract; the prior explicit Chunk 3 request supplied the applicable implementation authority. Do not infer future authority from the commit, branch, `CONTINUABLE` status, or this handoff.
+- **Retry policy:** two failed validation attempts per issue. Chunk 2's fixture-typing issue used one failed attempt and was repaired with explicit casts. Chunk 3's fake begin-call expectation used one failed attempt and was corrected. They are distinct resolved issues; neither history is reset. The over-anchored regression selector passed but selected only one test; it was corrected and is not a failed validation attempt.
+- **Current refresh activity:** read-only repository/source inspection and documentation authoring only. No tests, builds, Docker, migrations, database operations, or persistent-target access were performed in this refresh. The prior handoff reported cleanup of its disposable Compose project; current Docker state was not checked. Initial documentation checks found trailing Markdown spaces in both artifacts; they were removed. Final `rtk git diff --check` and the whitespace scan passed. These were documentation-format corrections, not implementation-test failures.
 
-## Completed Chunk 3 — Coordinator activation vertical slice
+## 3. Completed Chunk 3 — Coordinator activation vertical slice
 
-Exact controlling-plan objective: **“inactive→active and authorized active→active no-op via trusted service/runtime database, V1/V2/V6/V7; FR-002/009/023/026–027, AC-016/021/028/041/044 state facets.”**
+**Controlling-plan title:** “Chunk 3 — Coordinator activation vertical slice.”
+**Objective:** “inactive→active and authorized active→active no-op via trusted service/runtime database, V1/V2/V6/V7; FR-002/009/023/026–027, AC-016/021/028/041/044 state facets.”
 
-Implemented only that activation slice:
+The committed slice implements:
 
-- `internal/resources/state.go` now implements `StateService.SetState` for activation. It canonicalizes and validates the trusted actor, resolves stored Coordinator authority before Resource validation or no-op success, validates/canonicalizes the Resource ID, and uses the state transaction's shared Resource lock and separate authoritative row read.
-- An authorized Active→Active request commits as an unchanged no-op without reading the clock, calling the guarded mutator, updating `updated_at`, or attempting Activity.
-- An actual Inactive→Active transition samples one UTC-microsecond operation time after the Resource lock, calls the guarded state capability, requires a changed Active result, and commits once. Repository/database details are reduced to safe domain/operational outcomes; commit failure is not reported as success or definite rollback.
-- Deactivation remains fail-closed: desired Inactive returns `ErrOperational` after stored Coordinator authorization; it does not lock, check occupancy, mutate, or commit. `HasBlockingBookings` and adapter-side inactive mutation are explicit error stubs, never “no blocker” success.
-- New `internal/database/resource_state.go` opens an explicit READ COMMITTED transaction. Its narrow transaction wrapper reuses the existing stored-role lookup, Resource lock/read, commit, and rollback implementation without widening `resources.Repository`. Activation invokes `public.labreserve_set_resource_state` through the runtime connection; no direct Resource UPDATE privilege or new caller was added. The adapter rejects an inactive request and does not make the incomplete deactivation path available.
-- `internal/resources/state_test.go` preserves the explicit desired-state contract test and adds authorization/validation precedence, active no-op, post-lock time, repository error/rollback/no-retry, and fail-closed deactivation coverage. It replaces the obsolete assertion that activation itself must remain unimplemented.
-- New `internal/database/resource_state_integration_test.go` exercises the service and adapter against real PostgreSQL using `labreserve_app`: Coordinator activation, two Engineer no-op denials, invalid/unknown actors and target outcomes, retained Resource identity/raw legacy text/HTML-like description, Confirmed and Cancelled Booking snapshots, retained earlier Activity, a valid Engineer Booking after activation, Activity failure rollback and explicit retry, Active no-op under scoped Resource-UPDATE and Activity-failure detectors, and an observed Resource row-lock wait proving fresh post-lock operation/event time.
+- `internal/resources/state.go`: `StateService.SetState` canonicalizes the trusted actor and Resource UUID; resolves stored Coordinator authority before target validation or successful no-op; locks and separately reads the authoritative Resource; supports Inactive→Active and an authorized Active→Active no-op.
+- Active no-op commits unchanged without reading the clock, checking occupancy, updating the Resource, or attempting Activity. Actual activation samples UTC microsecond operation time after the Resource lock, invokes the guarded capability, and commits once.
+- Deactivation remains deliberately fail-closed in the service and adapter. An authorized Inactive request returns an operational error; the incomplete path performs no occupancy check or mutation. No web/application caller was added.
+- `internal/database/resource_state.go`: narrow READ COMMITTED adapter reuses existing stored-role, Resource-lock/read, commit, and rollback behavior. Activation uses Migration 006's guarded function through the actual runtime pool; no direct Resource write grant or repository widening was added.
+- `internal/resources/state_test.go`: explicit desired-state contract and activation authorization/order/no-op/time/error/rollback coverage, with deactivation kept fail-closed.
+- `internal/database/resource_state_integration_test.go`: real-PostgreSQL service/adapter activation, authorization, retained data and history, ordinary Booking after activation, failure rollback/retry, no-op detectors, and observed post-lock clock behavior.
+- Chunk 2's Migration 006 capability remains able to guard both directions at the database boundary. No migration was edited in Chunk 3.
 
-No HTTP handler, route, browser workflow, Booking implementation, Migration 006 rewrite, new privilege, or other Chunk 4+ behavior was added. `cmd/labreserve` and web composition do not yet call this service; integration evidence invokes the internal service with the actual runtime database pool, as required for this slice.
+**Not added:** HTTP routes/forms/browser workflow, Booking changes, or Chunk 4+ application behavior. `cmd/labreserve` and web composition do not call the state service yet. The next chunk must preserve this compile-safe intermediate state until deactivation is complete.
 
-## Files and cumulative-diff accounting
+## 4. Verification evidence and limits
 
-### Chunk 3 changes only
+The following results were **executed and reported in the Chunk 3 implementation session**, before commit. This refresh did not rerun them. The listed source hashes match the fingerprints recorded for that tested candidate. `19566ee` has `bd231b2` as its parent; this refresh changed no implementation source, and tests remain prior-session evidence rather than post-commit reruns.
 
-- Modified the existing Chunk 1 file `internal/resources/state.go` (replaced its fail-closed activation stub; kept deactivation fail-closed).
-- Modified `internal/resources/state_test.go` (kept the original contract test; replaced the obsolete activation-stub test and added activation tests).
-- Added `internal/database/resource_state.go`.
-- Added `internal/database/resource_state_integration_test.go`.
-- Added this authorized handoff: `docs/handoffs/task-004b-chunk-3-to-4.md`.
+| Prior command/check | Reported result and limits |
+| --- | --- |
+| `rtk go version && rtk go test ./internal/resources` baseline | PASS; host Go 1.27.3 and 43 pre-existing Resource tests. |
+| First post-edit `rtk go test ./internal/resources` | One failed attempt for a test expectation: `begin calls = 1, want 0`. The fake records the begin method invocation even when begin returns an error; expectation corrected to one. |
+| `rtk gofmt -w internal/resources/state_test.go && rtk go test ./internal/resources` | PASS; 58 Resource package tests. Current code fingerprints match this candidate. |
+| `rtk proxy go test -run '^$' ./...` and application `go build` | PASS; compile-only across packages, no behavior tests selected by the first command; application build succeeded. |
+| Verification-image build, disposable PostgreSQL 17.7 startup, explicit migration and seed | PASS, reported from project `labreserve-verify`; the prior handoff reports removal of its container, volume and network. This refresh did not verify current Docker state. |
+| State unit test discovery and `go test -count=1 -v -run '^TestResourceState' ./internal/resources` | PASS; seven state unit tests discovered and executed. |
+| Database focused test discovery and `go test -count=1 -v -p 1 -run '^(TestResource(Creation|Edit|Capabilities)|TestResourceState(Activation|Capability)|TestBookingCreationValidationAndEligibilityOutcomes)' ./internal/database` | PASS; 29 top-level real-PostgreSQL tests and subtests reported, no skips. Included new activation, Migration 006 capability/privilege, Resource regressions and Booking eligibility. |
+| `rtk gofmt -l` on changed Go files and `rtk git diff --check` | PASS, reported before commit. |
+| Full `make verify`, browser tests and later-chunk race/commit/lifecycle suites | NOT_RUN for Chunk 3; not its required focused gate or were assigned to later chunks. Full delivery verification is reserved for Chunk 11. |
 
-### Earlier-chunk changes preserved in this candidate
+An initially end-anchored regression selector passed while selecting only its exact Booking test. Test discovery exposed the narrow selection; the corrected prefix selector above then ran the intended 29. No required selected test was skipped. The historical Chunk 2 failed run remains recorded in `task-004b-chunk-2-to-3.md`.
 
-- Chunk 1's `internal/resources/state.go` / `state_test.go` contract was already untracked before Chunk 3; the files now contain that contract plus the Chunk 3 implementation/tests.
-- Chunk 2's tracked changes remain in `internal/database/booking_persistence_integration_test.go`, `internal/database/migrate.go`, `internal/database/resource_mutations_integration_test.go`, and `scripts/verify.sh`.
-- Chunk 2's untracked files remain `internal/database/migrations/006_resource_state.sql`, `internal/database/resource_state_capability_integration_test.go`, and `internal/database/resource_state_migration_integration_test.go`.
-- Earlier handoffs remain: `docs/handoffs/task-004b-chunk-0-to-1.md`, `task-004b-chunk-1-to-2.md`, and `task-004b-chunk-2-to-3.md`.
-- The base-to-HEAD history also contains the already documented Task 4A handoff path redactions, Chunk 0 handoff, and three plan path redactions. Those are not Chunk 3 edits.
+### Current source fingerprints observed
 
-The complete tracked Chunk 2 diff and all relevant untracked earlier-chunk files were inspected and preserved. The new Chunk 3 files and the final state of the continued service/test files were read and reviewed. No unrelated code or accidental file was found. The only new working-tree paths introduced in Chunk 3 are the adapter, integration test, and this authorized handoff.
+These match the source fingerprints recorded for the tested Chunk 3 candidate:
 
-### Fingerprints
+- `internal/resources/state.go`: `a4b52bb771b49f0bac658557355db6ed3d21f1c921fa325a048dd4d973b63c35`
+- `internal/resources/state_test.go`: `8b8a145095999ed970ba6d2cb697fa1f562456e7ffa0bf5f43598540b252eaa6`
+- `internal/database/resource_state.go`: `ce2206785e3e7d34f098241a43f9cb26ac7df4693321362ffcf8621dff205ad4`
+- `internal/database/resource_state_integration_test.go`: `7a7a1bed055ec00c748258707be7dbf71b34630588126ab621f3c35484d16d3d`
+- `internal/database/resource_state_capability_integration_test.go`: `4923397dd1d305915da39f65dafd6b447ab74bcdc4006e66e2623a7b56171c14`
+- `internal/database/resource_state_migration_integration_test.go`: `b9acefac467ad644cc73c5d244d6125a86d2b67090dd7c056ac88ad199de01ed`
 
-Migrations (same as implementation base / Chunk 2 handoff):
+Migrations observed at the committed candidate:
 
 - 001 `2ba81c1dd6b9c31784b5912134a9159406f69d322d4edd13340ab612b9cd719f`
 - 002 `958b1149717b93226d6d09feb0c023bf2a95f4859b5f3df482fd309625de45e4`
@@ -70,58 +83,36 @@ Migrations (same as implementation base / Chunk 2 handoff):
 - 005 `ea30417512fec6da02ed40d90502a5bbd4991a8e226f12ff56bce3504cd38ec7`
 - 006 `84330d7bd227f56e004da61ed3169e76deb3e77a0478e749c4374cb744dd8d7f`
 
-At handoff creation, Chunk 3 source hashes were:
+## 5. Candidate, diff and preservation audit
 
-- `internal/resources/state.go`: `a4b52bb771b49f0bac658557355db6ed3d21f1c921fa325a048dd4d973b63c35`
-- `internal/resources/state_test.go`: `8b8a145095999ed970ba6d2cb697fa1f562456e7ffa0bf5f43598540b252eaa6`
-- `internal/database/resource_state.go`: `ce2206785e3e7d34f098241a43f9cb26ac7df4693321362ffcf8621dff205ad4`
-- `internal/database/resource_state_integration_test.go`: `7a7a1bed055ec00c748258707be7dbf71b34630588126ab621f3c35484d16d3d`
+- At refresh start, the worktree was clean at `19566ee`; the latest commit contains the complete 14-file Task 4B candidate described above. The current documentation-only delta is limited to the modified evidence handoff and its paired new instruction. There are no staged changes and no implementation delta from HEAD.
+- This refresh re-read the full Task 4B contract, full controlling plan including its ending, the current handoff and relevant prior handoffs. It inspected the commit inventory/stat, complete tracked Chunk 2 edits, Migration 006, service/adapter, unit and PostgreSQL integration tests. No source/plan drift or unrelated file was found.
+- The plan and task are unchanged; migration hashes 001–006 remain as recorded. Chunk 1 contracts, Chunk 2's guarded capability/migration tests, and accepted Resource create/edit and Booking behavior remain in the commit.
+- Corrected historical plan-hash evidence in `task-004b-chunk-2-to-3.md` remains preserved; do not edit that historical handoff to erase its earlier error.
 
-Earlier handoff hashes match Chunk 2 evidence: state capability integration `4923397dd1d305915da39f65dafd6b447ab74bcdc4006e66e2623a7b56171c14`; migration integration `b9acefac467ad644cc73c5d244d6125a86d2b67090dd7c056ac88ad199de01ed`; prior handoffs `37e3e2fb246b86c9b0d4a07c1b458763649324a5f5fc5f54e4a7c2b9b42cf50d` and `13c91f2c2f39fc46d87e075b2dae871862b4d77439e75ba3f02c37219b580f8c`.
+## 6. Risks, gaps, decisions and rollback
 
-## Verification evidence
+- **Functional:** deactivation is intentionally unavailable in the service until Chunk 4. It must remain fail-closed; no success may be inferred from an occupancy error.
+- **Integration:** no HTTP/session-to-state-service route exists; Task 4C remains out of scope. Current refresh did not start Docker or inspect a database.
+- **Validation gap:** Chunk 3's tests are reported from the prior execution and tied to matching current source fingerprints, but were not rerun after commit. No independent implementation review has occurred. Full `make verify`, deactivation boundaries/races, actual COMMIT rejection, ambiguous acknowledgement, and restart lifecycle remain unverified in this chunk or assigned to later chunks.
+- **Migration/data integrity:** Migration 006 is additive and unchanged. Compatibility with an uninspected persistent Migration 005 ledger remains unresolved; no persistent target was inspected or changed. Disposable migration evidence is not persistent-target certification.
+- **Level 2 decisions:** none identified for Chunk 4 by the current task/plan. Any required change to product precedence, security/trust, locking/isolation, migration history, or task scope requires escalation rather than silent discretion.
+- **Rollback:** no rollback was performed. The code candidate is committed; do not reset or rewrite history. Any source correction requires a separately authorized scoped change. These handoff documents are documentation-only working-tree edits; do not discard or overwrite them as cleanup.
 
-All shell commands below ran through `rtk` from the repository root. Focused PostgreSQL commands ran in the freshly built repository verification image and isolated Compose project.
+## 7. Exact next boundary and transfer instructions
 
-| Command / procedure | Result |
-| --- | --- |
-| Baseline: `rtk go version && rtk go test ./internal/resources` | **PASS**, host Go 1.27.3; 43 pre-existing Resource tests. |
-| First post-edit `rtk go test ./internal/resources` | **FAIL, one attempt for one test-expectation issue.** Output: `TestResourceStateActivationRepositoryFailuresAreOperational/begin: state_test.go:157: begin calls = 1, want 0` (the parent test also reported failure). The fake records the one begin method invocation even when begin returns an error; corrected the test expectation to one. |
-| `rtk gofmt -w internal/resources/state_test.go && rtk go test ./internal/resources` | **PASS**, 58 Resource package tests. The current candidate was also fully formatted after the final integration-test assertion adjustment. |
-| `rtk proxy go test -run '^$' ./... && rtk proxy go build -o /tmp/labreserve-task4b-chunk3 ./cmd/labreserve` | **PASS**, all Go packages/test packages compiled; no behavior tests were selected by the first command. Application build succeeded. |
-| `rtk docker compose --project-name labreserve-verify --file compose.yaml --profile verify build verify-go verify-migrate` | **PASS**, images built from current candidate source (Go test image uses repository-pinned Go 1.26). |
-| `rtk docker compose --project-name labreserve-verify --file compose.yaml --profile verify up --wait -d verify-db`; `rtk docker compose --project-name labreserve-verify --file compose.yaml --profile verify run --rm verify-migrate`; `rtk docker compose --project-name labreserve-verify --file compose.yaml --profile verify run --rm verify-seed` | **PASS**, fresh disposable PostgreSQL 17.7, explicit migrations and seed. No persistent target was touched. |
-| `rtk docker compose --project-name labreserve-verify --file compose.yaml --profile verify run --rm --no-deps verify-go go test -list '^TestResourceState' ./internal/resources` | **PASS**, discovered all 7 Resource state unit tests. |
-| `rtk docker compose --project-name labreserve-verify --file compose.yaml --profile verify run --rm --no-deps verify-go go test -list '^(TestResourceState(Activation|Capability)|TestResourceCreation)' ./internal/database` | **PASS**, discovered the state activation/capability and Resource creation suites. |
-| `rtk docker compose --project-name labreserve-verify --file compose.yaml --profile verify run --rm --no-deps verify-go go test -count=1 -v -run '^TestResourceState' ./internal/resources` | **PASS**, all 7 state unit tests and subtests. |
-| `rtk docker compose --project-name labreserve-verify --file compose.yaml --profile verify run --rm --no-deps verify-go go test -count=1 -v ./internal/resources` | **PASS**, full Resource service unit package, including accepted create/edit regressions. |
-| `rtk docker compose --project-name labreserve-verify --file compose.yaml --profile verify run --rm --no-deps verify-go go test -list '^(TestResource(Creation|Edit|Capabilities)|TestResourceState(Activation|Capability)|TestBookingCreationValidationAndEligibilityOutcomes)' ./internal/database` | **PASS**, discovered 29 top-level tests. |
-| `rtk docker compose --project-name labreserve-verify --file compose.yaml --profile verify run --rm --no-deps verify-go go test -count=1 -v -p 1 -run '^(TestResource(Creation|Edit|Capabilities)|TestResourceState(Activation|Capability)|TestBookingCreationValidationAndEligibilityOutcomes)' ./internal/database` | **PASS**, all 29 discovered top-level real-PostgreSQL tests and their subtests. Covered new activation integration, direct Migration 006 capability/privilege behavior, prior Resource create/edit regressions, and normal Booking eligibility. Actual runtime operations used `labreserve_app`; no test skips were reported. |
-| `rtk gofmt -l internal/resources/state.go internal/resources/state_test.go internal/database/resource_state.go internal/database/resource_state_integration_test.go` | **PASS**, no output. |
-| `rtk git diff --check` | **PASS** for tracked changes; complete new/continued source files were also reviewed. |
-| `rtk docker compose --project-name labreserve-verify --file compose.yaml --profile verify down --volumes --remove-orphans` | **PASS**, removed only the created disposable container, volume, and network; filtered follow-up discovery found no project container/volume. |
+**Next planned chunk:** **Chunk 4 — Safe deactivation, occupancy boundaries and complete no-ops**, exactly as section 9 of the controlling plan specifies.
 
-The initial broad regression selector was accidentally end-anchored and selected only the exact `TestBookingCreationValidationAndEligibilityOutcomes`; it passed. The corrected prefix selector above then discovered and passed all 29 intended tests. This was not counted as a failed validation attempt. No required selected test was skipped.
+The paired instruction describes the plan-grounded scope and required evidence. Before implementation, a separately authorized session must revalidate current authorization, branch/HEAD/status, task/plan identities and candidate diff. Preserve Chunk 3 activation and Migration 006. Implement both real no-ops before occupancy evaluation; for actual Active→Inactive only, use fresh post-lock time and a separate all-owner Confirmed query with `end_at > operation_time`. Do not rewrite Migration 006 for convenience, modify Bookings, add HTTP/browser work, start Chunk 5, or treat the prepared instruction as authorization.
 
-**Not run:** full `make verify` (not required by Chunk 3's controlling-plan validation; no HTTP/web composition changed); Playwright/browser tests (Task 4C excluded); Migration 005→006 upgrade/mismatch tests (unchanged Chunk 2 tests and source, with prior PASS evidence retained in the Chunk 2 handoff); definite COMMIT-rejection and ambiguous-acknowledgement suites (later Chunk 9); deactivation/booking and cancellation race suites (later Chunks 4, 6, and 7); and full lifecycle/restart verification (later Chunk 10/11). The fresh explicit migration and runtime invocation of Migration 006's guarded capability did run in this chunk.
+Persistent Migration 005 compatibility is a prerequisite only before any persistent-target operation. Stop on a divergent historical checksum; do not rewrite a ledger or reset a target.
 
-## Diff, invariants, and risk review
+## 8. Suggested skills
 
-- **Scope:** Chunk 3 changed the activation service slice, its narrow database adapter, and focused tests/handoff only. No Chunk 4 or HTTP/browser work.
-- **Chunk 2 preservation:** Migration 006 source/hash and capability tests remain byte-identical to the Chunk 2 handoff. Existing ACL/guard tests passed; no direct Resource privileges or runtime grants changed. Migrations 001–005 remain byte-identical.
-- **Authorization:** service resolves persisted Coordinator authority before target validation and Active no-op success; actual runtime tests rejected both Engineers and unknown/malformed actors. The database capability retains its own Coordinator guard. The application still supplies the trusted actor ID; this is not a new SQL authentication boundary.
-- **Resource/data integrity:** activation writes only via the guarded capability. Integration snapshots verified code, name, description including legacy edge whitespace/HTML-like text, creation time, retained Confirmed/Cancelled Booking rows, and prior Activity; only state/update time and one activation event changed.
-- **Lock/time/Activity:** shared Resource `FOR UPDATE` plus separate locked read is reused; an actual PostgreSQL waiter was observed and clock calls remained zero until lock release. The one post-lock UTC-microsecond time was used for `updated_at` and event. Activity-trigger failure left Resource/history unchanged; explicit retry produced one event. Active no-op was exercised with both UPDATE and event-failure detectors installed.
-- **Functional risk:** deactivation is intentionally unavailable until Chunk 4. The service has no web/composition-root caller yet; browser behavior is out of scope. Activation after a future Confirmed Booking was retained is covered at the guarded capability boundary from Chunk 2, and ordinary Engineer Booking after service activation passed.
-- **Integration/validation gap:** no browser/session-to-service call path, deactivation behavior, actual COMMIT rejection, ambiguous acknowledgement, or full restart/replay lifecycle is claimed here. These remain in their assigned later chunks. Persistent Migration 005 ledger compatibility remains unresolved for uninspected persistent targets; no such target was inspected or changed.
-- **Rollback:** to revert only Chunk 3, restore the Chunk 1 fail-closed `SetState` and its previous test contract, remove `internal/database/resource_state.go` and `internal/database/resource_state_integration_test.go`, and remove this handoff only if authorized. Preserve Chunk 1/2 work and Migration 006; do not down-migrate or alter any ledger.
-
-## Exact next-session instruction — Chunk 4 only
-
-A fresh session must revalidate authorization, branch/HEAD/working-tree state, the complete Task 4B contract and plan, current plan/task hashes, and this complete handoff before editing. Preserve all accepted Chunk 1–3 code and Chunk 2 migration evidence. The next authorized implementation request should execute **Chunk 4 — Safe deactivation, occupancy boundaries and complete no-ops** only, per the controlling plan.
-
-Chunk 4 must implement authorization-before-equality, both genuine no-ops, and only the actual Active→Inactive path's fresh post-lock time plus separate occupancy query `resource_id = target AND state = 'confirmed' AND end_at > operation_time`. Keep the guarded Migration 006 checks; do not rewrite Migration 006 for convenience. Never infer “unoccupied” from an error, mutate/cancel Bookings, introduce HTTP handlers, or proceed into Chunk 5. Add the plan's real-PostgreSQL boundaries/failures and service tests, run that chunk's focused verification, inspect the cumulative diff, write its authorized handoff only if the fresh session is authorized, and stop.
-
-Persistent Migration 005 compatibility remains a prerequisite only before any persistent-target operation. Disposable migration success is not evidence that an uninspected persistent ledger is compatible.
+- `chunked-implementation` — SINGLE-CHUNK mode, only after separate Chunk 4 authorization and preflight.
+- `pre-read-discipline`, `pre-edit-discipline`, and `post-edit-discipline` — current source/diff discovery and bounded implementation verification.
+- `rtk-command-prefix` — repository and test commands.
+- `specification-readiness-authority` — only if the current authorization/preflight or source-freshness gate needs revalidation.
+- `handoff` — only for a separately authorized next transfer.
 
 **Chunk 3 status: CONTINUABLE.**

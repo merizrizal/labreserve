@@ -23,10 +23,17 @@ func (s *Store) BeginResourceStateChange(ctx context.Context) (resources.StateTr
 	return &resourceStateTransaction{resourceCreationTransaction: &resourceCreationTransaction{tx: tx}}, nil
 }
 
-// HasBlockingBookings stays unavailable until the deactivation slice adds its
-// post-lock occupancy decision; callers must not interpret an error as empty.
-func (*resourceStateTransaction) HasBlockingBookings(context.Context, string, time.Time) (bool, error) {
-	return false, errors.New("resource deactivation occupancy check is not implemented")
+func (tx *resourceStateTransaction) HasBlockingBookings(ctx context.Context, resourceID string, operationTime time.Time) (bool, error) {
+	var occupied bool
+	err := tx.tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM public.bookings
+			WHERE resource_id = $1::uuid AND state = 'confirmed' AND end_at > $2::timestamptz
+		)`, resourceID, operationTime).Scan(&occupied)
+	if err != nil {
+		return false, fmt.Errorf("query Resource deactivation occupancy: %w", err)
+	}
+	return occupied, nil
 }
 
 func (tx *resourceStateTransaction) SetResourceState(
@@ -35,10 +42,6 @@ func (tx *resourceStateTransaction) SetResourceState(
 	active bool,
 	occurredAt time.Time,
 ) (resources.Resource, bool, error) {
-	if !active {
-		return resources.Resource{}, false, errors.New("resource deactivation is not implemented")
-	}
-
 	var resource resources.Resource
 	var changed bool
 	err := tx.tx.QueryRow(ctx, `
@@ -52,10 +55,15 @@ func (tx *resourceStateTransaction) SetResourceState(
 	}
 	if err != nil {
 		var postgresErr *pgconn.PgError
-		if errors.As(err, &postgresErr) && postgresErr.Code == "42501" {
-			return resources.Resource{}, false, resources.ErrForbidden
+		if errors.As(err, &postgresErr) {
+			if postgresErr.Code == "42501" && postgresErr.Message == "coordinator authority required" {
+				return resources.Resource{}, false, resources.ErrForbidden
+			}
+			if postgresErr.Code == "P0001" && postgresErr.Message == "resource has blocking confirmed bookings" {
+				return resources.Resource{}, false, resources.ErrResourceOccupied
+			}
 		}
-		return resources.Resource{}, false, fmt.Errorf("invoke guarded Resource activation: %w", err)
+		return resources.Resource{}, false, fmt.Errorf("invoke guarded Resource state capability: %w", err)
 	}
 	return resource, changed, nil
 }

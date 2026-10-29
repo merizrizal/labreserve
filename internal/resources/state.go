@@ -50,9 +50,8 @@ func NewStateService(repository StateRepository, now func() time.Time) *StateSer
 	return &StateService{repository: repository, now: now}
 }
 
-// SetState applies an explicit desired state using stored Coordinator authority
-// and the shared Resource lock. Activation is available in this slice;
-// deactivation remains fail-closed until its occupancy contract is implemented.
+// SetState applies an explicit desired state using stored Coordinator authority,
+// the shared Resource lock, and the guarded state capability.
 func (s *StateService) SetState(ctx context.Context, actor Actor, request StateRequest) (StateResult, error) {
 	if s == nil || s.repository == nil {
 		return StateResult{}, operationalError("initialize resource state service")
@@ -87,10 +86,6 @@ func (s *StateService) SetState(ctx context.Context, actor Actor, request StateR
 	if !resourceIDOK {
 		return StateResult{}, ErrInvalidInput
 	}
-	if !request.Active {
-		return StateResult{}, operationalError("resource deactivation is not implemented")
-	}
-
 	locked, found, err := tx.LockResource(ctx, resourceID)
 	if err != nil {
 		return StateResult{}, operationalError("lock resource for state change")
@@ -106,6 +101,16 @@ func (s *StateService) SetState(ctx context.Context, actor Actor, request StateR
 	}
 
 	occurredAt := s.now().UTC().Truncate(time.Microsecond)
+	if !request.Active {
+		occupied, err := tx.HasBlockingBookings(ctx, resourceID, occurredAt)
+		if err != nil {
+			return StateResult{}, operationalError("check resource deactivation occupancy")
+		}
+		if occupied {
+			return StateResult{}, ErrResourceOccupied
+		}
+	}
+
 	resource, changed, err := tx.SetResourceState(ctx, actorID, resourceID, request.Active, occurredAt)
 	if errors.Is(err, ErrUnknownResource) {
 		return StateResult{}, ErrUnknownResource
@@ -117,13 +122,13 @@ func (s *StateService) SetState(ctx context.Context, actor Actor, request StateR
 		return StateResult{}, ErrResourceOccupied
 	}
 	if err != nil {
-		return StateResult{}, operationalError("activate resource")
+		return StateResult{}, operationalError("change resource state")
 	}
-	if !changed || !resource.Active {
-		return StateResult{}, operationalError("guarded resource activation returned no transition")
+	if !changed || resource.Active != request.Active {
+		return StateResult{}, operationalError("guarded resource state change returned no transition")
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return StateResult{}, operationalError("commit resource activation")
+		return StateResult{}, operationalError("commit resource state change")
 	}
 	return StateResult{Resource: resource, Changed: true}, nil
 }

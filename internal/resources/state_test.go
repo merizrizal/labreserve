@@ -181,37 +181,139 @@ func TestResourceStateNoOpCommitFailureIsOperational(t *testing.T) {
 	}
 }
 
-func TestResourceStateDeactivationFailsClosedInActivationSlice(t *testing.T) {
+func TestResourceStateInactiveNoOpCommitsWithoutClockOrOccupancy(t *testing.T) {
+	updatedAt := time.Date(2040, time.January, 2, 3, 4, 5, 123456000, time.UTC)
+	repository := newStateFakeRepository(Resource{ID: creationResourceID, Active: false, UpdatedAt: updatedAt})
+	repository.occupied = true
+	repository.occupancyErr = errors.New("occupancy query must not run for a no-op")
+	clockCalls := 0
+	service := NewStateService(repository, func() time.Time {
+		clockCalls++
+		return updatedAt.Add(time.Hour)
+	})
+
+	result, err := service.SetState(context.Background(), Actor{AccountID: creationCoordinatorID}, StateRequest{
+		ResourceID: creationResourceID, Active: false,
+	})
+	if err != nil || result.Changed || result.Resource.Active || !result.Resource.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("inactive no-op result=%+v error=%v", result, err)
+	}
+	if repository.tx.lockCalls != 1 || repository.tx.occupancyCalls != 0 || repository.tx.stateCalls != 0 ||
+		repository.tx.commitCalls != 1 || !repository.tx.committed || clockCalls != 0 ||
+		!reflect.DeepEqual(repository.tx.trace, []string{"authorize", "lock", "commit"}) {
+		t.Fatalf("inactive no-op performed clock/occupancy/mutation work: tx=%+v clock calls=%d", repository.tx, clockCalls)
+	}
+}
+
+func TestResourceStateRejectsEngineerOnBothMatchingStateNoOps(t *testing.T) {
+	for _, active := range []bool{true, false} {
+		repository := newStateFakeRepository(Resource{ID: creationResourceID, Active: active})
+		repository.coordinator = false
+		service := NewStateService(repository, time.Now)
+		if _, err := service.SetState(context.Background(), Actor{AccountID: creationEngineerID}, StateRequest{
+			ResourceID: creationResourceID, Active: active,
+		}); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("Engineer matching-state request active=%v error=%v, want forbidden", active, err)
+		}
+		if repository.tx.lockCalls != 0 || repository.tx.commitCalls != 0 {
+			t.Fatalf("Engineer matching-state request active=%v reached target success: %+v", active, repository.tx)
+		}
+	}
+}
+
+func TestResourceStateDeactivationUsesPostLockOccupancyAndSharedTime(t *testing.T) {
+	operationTime := time.Date(2040, time.January, 2, 3, 4, 5, 123456789, time.UTC)
 	repository := newStateFakeRepository(Resource{ID: creationResourceID, Active: true})
 	clockCalls := 0
 	service := NewStateService(repository, func() time.Time {
 		clockCalls++
-		return time.Now()
+		if repository.tx == nil || !repository.tx.locked || repository.tx.occupancyCalls != 0 || repository.tx.stateCalls != 0 {
+			t.Fatal("deactivation time was captured before the Resource lock or after eligibility/mutation work")
+		}
+		return operationTime
 	})
+
 	result, err := service.SetState(context.Background(), Actor{AccountID: creationCoordinatorID}, StateRequest{
 		ResourceID: creationResourceID, Active: false,
 	})
-	if !errors.Is(err, ErrOperational) || !strings.Contains(err.Error(), "not implemented") || result != (StateResult{}) {
-		t.Fatalf("deactivation result=%+v error=%v, want fail-closed operational result", result, err)
+	wantTime := operationTime.UTC().Truncate(time.Microsecond)
+	if err != nil || !result.Changed || result.Resource.Active || !result.Resource.UpdatedAt.Equal(wantTime) {
+		t.Fatalf("deactivation result=%+v error=%v", result, err)
 	}
-	if repository.tx.lockCalls != 0 || repository.tx.stateCalls != 0 || repository.tx.occupancyCalls != 0 ||
-		repository.tx.commitCalls != 0 || repository.tx.resolveCalls != 1 || clockCalls != 0 || !repository.tx.rolledBack {
-		t.Fatalf("deactivation reached incomplete state work: tx=%+v clock calls=%d", repository.tx, clockCalls)
+	if repository.tx.occupancyCalls != 1 || repository.tx.stateCalls != 1 || repository.tx.commitCalls != 1 ||
+		!repository.tx.committed || clockCalls != 1 || repository.tx.desiredActive ||
+		!repository.tx.occurredAt.Equal(wantTime) || repository.tx.occupancyResourceID != creationResourceID ||
+		!repository.tx.occupancyAt.Equal(wantTime) ||
+		!reflect.DeepEqual(repository.tx.trace, []string{"authorize", "lock", "occupancy", "state", "commit"}) {
+		t.Fatalf("deactivation transaction order/time = %+v; clock calls=%d", repository.tx, clockCalls)
+	}
+}
+
+func TestResourceStateDeactivationOccupancyAndOperationalFailures(t *testing.T) {
+	queryFailure := errors.New("sensitive PostgreSQL query diagnostic")
+	mutationFailure := errors.New("sensitive mutation diagnostic")
+	for _, test := range []struct {
+		name           string
+		occupied       bool
+		occupancyErr   error
+		mutationErr    error
+		wantErr        error
+		wantStateCalls int
+	}{
+		{name: "blocker", occupied: true, wantErr: ErrResourceOccupied},
+		{name: "occupancy query failure", occupancyErr: queryFailure, wantErr: ErrOperational},
+		{name: "guarded mutation failure", mutationErr: mutationFailure, wantErr: ErrOperational, wantStateCalls: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := newStateFakeRepository(Resource{ID: creationResourceID, Active: true})
+			repository.occupied, repository.occupancyErr, repository.stateErr = test.occupied, test.occupancyErr, test.mutationErr
+			service := NewStateService(repository, func() time.Time { return time.Now() })
+			result, err := service.SetState(context.Background(), Actor{AccountID: creationCoordinatorID}, StateRequest{
+				ResourceID: creationResourceID, Active: false,
+			})
+			if !errors.Is(err, test.wantErr) || result != (StateResult{}) {
+				t.Fatalf("deactivation result=%+v error=%v, want %v", result, err, test.wantErr)
+			}
+			if test.name == "occupancy query failure" && strings.Contains(err.Error(), queryFailure.Error()) {
+				t.Fatalf("operational error leaked database diagnostic: %v", err)
+			}
+			if repository.tx.occupancyCalls != 1 || repository.tx.stateCalls != test.wantStateCalls ||
+				repository.tx.commitCalls != 0 || !repository.tx.rolledBack {
+				t.Fatalf("deactivation error path performed unexpected work: %+v", repository.tx)
+			}
+		})
+	}
+}
+
+func TestResourceStateInactiveNoOpCommitFailureIsOperational(t *testing.T) {
+	repository := newStateFakeRepository(Resource{ID: creationResourceID, Active: false})
+	repository.occupied = true
+	repository.occupancyErr = errors.New("no-op must not query occupancy")
+	repository.commitErr = errors.New("commit acknowledgement unavailable")
+	service := NewStateService(repository, time.Now)
+	result, err := service.SetState(context.Background(), Actor{AccountID: creationCoordinatorID}, StateRequest{
+		ResourceID: creationResourceID, Active: false,
+	})
+	if !errors.Is(err, ErrOperational) || result != (StateResult{}) || repository.tx.commitCalls != 1 ||
+		repository.tx.occupancyCalls != 0 || repository.tx.stateCalls != 0 || !repository.tx.rolledBack {
+		t.Fatalf("failed inactive no-op finalization result=%+v error=%v transaction=%+v", result, err, repository.tx)
 	}
 }
 
 type stateFakeRepository struct {
-	exists      bool
-	coordinator bool
-	found       bool
-	resource    Resource
-	beginErr    error
-	resolveErr  error
-	lockErr     error
-	stateErr    error
-	commitErr   error
-	beginCalls  int
-	tx          *stateFakeTransaction
+	exists       bool
+	coordinator  bool
+	found        bool
+	resource     Resource
+	beginErr     error
+	resolveErr   error
+	lockErr      error
+	stateErr     error
+	commitErr    error
+	occupancyErr error
+	occupied     bool
+	beginCalls   int
+	tx           *stateFakeTransaction
 }
 
 func newStateFakeRepository(resource Resource) *stateFakeRepository {
@@ -228,22 +330,24 @@ func (r *stateFakeRepository) BeginResourceStateChange(context.Context) (StateTr
 }
 
 type stateFakeTransaction struct {
-	repository     *stateFakeRepository
-	trace          []string
-	resource       Resource
-	found          bool
-	locked         bool
-	actorID        string
-	resourceID     string
-	desiredActive  bool
-	occurredAt     time.Time
-	resolveCalls   int
-	lockCalls      int
-	stateCalls     int
-	occupancyCalls int
-	commitCalls    int
-	committed      bool
-	rolledBack     bool
+	repository          *stateFakeRepository
+	trace               []string
+	resource            Resource
+	found               bool
+	locked              bool
+	actorID             string
+	resourceID          string
+	desiredActive       bool
+	occurredAt          time.Time
+	resolveCalls        int
+	lockCalls           int
+	stateCalls          int
+	occupancyCalls      int
+	occupancyResourceID string
+	occupancyAt         time.Time
+	commitCalls         int
+	committed           bool
+	rolledBack          bool
 }
 
 func (tx *stateFakeTransaction) ResolveCoordinator(_ context.Context, actorID string) (bool, bool, error) {
@@ -267,10 +371,14 @@ func (tx *stateFakeTransaction) LockResource(_ context.Context, resourceID strin
 	return tx.resource, tx.found, nil
 }
 
-func (tx *stateFakeTransaction) HasBlockingBookings(context.Context, string, time.Time) (bool, error) {
+func (tx *stateFakeTransaction) HasBlockingBookings(_ context.Context, resourceID string, operationTime time.Time) (bool, error) {
 	tx.trace = append(tx.trace, "occupancy")
 	tx.occupancyCalls++
-	return false, errors.New("unexpected occupancy check")
+	tx.occupancyResourceID, tx.occupancyAt = resourceID, operationTime
+	if tx.repository.occupancyErr != nil {
+		return false, tx.repository.occupancyErr
+	}
+	return tx.repository.occupied, nil
 }
 
 func (tx *stateFakeTransaction) SetResourceState(_ context.Context, actorID, resourceID string, active bool, occurredAt time.Time) (Resource, bool, error) {
@@ -280,10 +388,7 @@ func (tx *stateFakeTransaction) SetResourceState(_ context.Context, actorID, res
 	if tx.repository.stateErr != nil {
 		return Resource{}, false, tx.repository.stateErr
 	}
-	if !active {
-		return Resource{}, false, errors.New("unexpected deactivation")
-	}
-	tx.resource.Active = true
+	tx.resource.Active = active
 	tx.resource.UpdatedAt = occurredAt
 	return tx.resource, true, nil
 }
