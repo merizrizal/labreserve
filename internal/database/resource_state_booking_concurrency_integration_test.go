@@ -563,6 +563,7 @@ type resourceStateRaceRepository struct {
 	started        chan<- int32
 	resourceLocked chan<- int32
 	beforeSet      *bookingRaceGate
+	afterOccupied  *bookingRaceGate
 	beforeCommit   *bookingRaceGate
 }
 
@@ -588,7 +589,7 @@ func (repository *resourceStateRaceRepository) BeginResourceStateChange(ctx cont
 	return &resourceStateRaceTransaction{
 		StateTransaction: transaction, raw: concrete, pid: pid,
 		resourceLocked: repository.resourceLocked, beforeSet: repository.beforeSet,
-		beforeCommit: repository.beforeCommit,
+		afterOccupied: repository.afterOccupied, beforeCommit: repository.beforeCommit,
 	}, nil
 }
 
@@ -598,6 +599,7 @@ type resourceStateRaceTransaction struct {
 	pid            int32
 	resourceLocked chan<- int32
 	beforeSet      *bookingRaceGate
+	afterOccupied  *bookingRaceGate
 	beforeCommit   *bookingRaceGate
 	expected       *resourceStateRaceExpectation
 }
@@ -617,6 +619,19 @@ func (tx *resourceStateRaceTransaction) LockResource(ctx context.Context, resour
 		}
 	}
 	return resource, found, err
+}
+
+func (tx *resourceStateRaceTransaction) HasBlockingBookings(ctx context.Context, resourceID string, operationTime time.Time) (bool, error) {
+	occupied, err := tx.StateTransaction.HasBlockingBookings(ctx, resourceID, operationTime)
+	if err != nil || !occupied {
+		return occupied, err
+	}
+	if tx.afterOccupied != nil {
+		if err := tx.afterOccupied.pause(ctx, tx.pid); err != nil {
+			return false, err
+		}
+	}
+	return occupied, nil
 }
 
 func (tx *resourceStateRaceTransaction) SetResourceState(
