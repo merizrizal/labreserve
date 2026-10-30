@@ -181,6 +181,26 @@ func TestResourceStateNoOpCommitFailureIsOperational(t *testing.T) {
 	}
 }
 
+func TestResourceStateCommitAcknowledgementFailureIsOperationalWithoutRetry(t *testing.T) {
+	diagnostic := "simulated lost acknowledgement with private database details"
+	repository := newStateFakeRepository(Resource{ID: creationResourceID, Active: false})
+	repository.commitErr = errors.New(diagnostic)
+	service := NewStateService(repository, func() time.Time {
+		return time.Date(2040, time.January, 2, 3, 4, 5, 123456000, time.UTC)
+	})
+
+	result, err := service.SetState(context.Background(), Actor{AccountID: creationCoordinatorID}, StateRequest{
+		ResourceID: creationResourceID, Active: true,
+	})
+	if !errors.Is(err, ErrOperational) || result != (StateResult{}) || strings.Contains(err.Error(), diagnostic) {
+		t.Fatalf("ambiguous commit result=%+v error=%v; want sanitized operational failure", result, err)
+	}
+	if repository.beginCalls != 1 || repository.tx.stateCalls != 1 || repository.tx.commitCalls != 1 ||
+		!repository.tx.rolledBack || repository.tx.committed {
+		t.Fatalf("ambiguous commit was retried or reported as success: begin=%d tx=%+v", repository.beginCalls, repository.tx)
+	}
+}
+
 func TestResourceStateInactiveNoOpCommitsWithoutClockOrOccupancy(t *testing.T) {
 	updatedAt := time.Date(2040, time.January, 2, 3, 4, 5, 123456000, time.UTC)
 	repository := newStateFakeRepository(Resource{ID: creationResourceID, Active: false, UpdatedAt: updatedAt})
