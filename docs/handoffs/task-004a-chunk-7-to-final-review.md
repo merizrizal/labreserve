@@ -30,11 +30,11 @@ Historical retry records remain unchanged: Chunk 4 import-cycle failures 3/5; Ch
 
 ## Verification in this session
 
-- `TMPDIR=/home/meriz/.cache/labreserve-tmp rtk go test ./internal/resources ./internal/database` — passed (41 tests reported by RTK; database integration tests are skipped in this host invocation without the test database URLs).
-- `TMPDIR=/home/meriz/.cache/labreserve-tmp rtk go test ./...` — passed, 115 tests in 8 packages; this host run is supplemental, not the PostgreSQL/browser evidence.
-- `TMPDIR=/home/meriz/.cache/labreserve-tmp rtk go vet ./...` — passed.
+- `TMPDIR=/<REDACTED>/labreserve-tmp rtk go test ./internal/resources ./internal/database` — passed (41 tests reported by RTK; database integration tests are skipped in this host invocation without the test database URLs).
+- `TMPDIR=/<REDACTED>/labreserve-tmp rtk go test ./...` — passed, 115 tests in 8 packages; this host run is supplemental, not the PostgreSQL/browser evidence.
+- `TMPDIR=/<REDACTED>/labreserve-tmp rtk go vet ./...` — passed.
 - Go formatting, `rtk sh -n scripts/verify.sh`, and `rtk git diff --check` — passed. The repository gate also checked formatting across `cmd` and `internal`.
-- `TMPDIR=/home/meriz/.cache/labreserve-tmp rtk make verify` — **passed on the current candidate**. All Go packages, including `internal/database` with real PostgreSQL, passed; the app started with the restricted runtime role; Playwright passed **8/8**; Resource and owner-cancellation fixtures survived actual PostgreSQL/application restarts; post-restart Resource capability/no-op/duplicate checks and Booking creation/cancellation replay checks passed. Script ended `Repository verification passed.`
+- `TMPDIR=/<REDACTED>/labreserve-tmp rtk make verify` — **passed on the current candidate**. All Go packages, including `internal/database` with real PostgreSQL, passed; the app started with the restricted runtime role; Playwright passed **8/8**; Resource and owner-cancellation fixtures survived actual PostgreSQL/application restarts; post-restart Resource capability/no-op/duplicate checks and Booking creation/cancellation replay checks passed. Script ended `Repository verification passed.`
 
 ## Final review and remaining boundaries
 

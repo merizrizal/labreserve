@@ -22,7 +22,7 @@ All following repository documents are tracked/committed at the planning HEAD an
 
 | Source | Authority and use |
 | --- | --- |
-| `AGENTS.md`; session instructions from `/home/meriz/.pi/agent/AGENTS.md` | Repository workflow, preservation, verification, authority and separate-session review. The global file is an external session instruction, not a claimed repository-tracked source. |
+| `AGENTS.md`; session instructions from `/<REDACTED>/AGENTS.md` | Repository workflow, preservation, verification, authority and separate-session review. The global file is an external session instruction, not a claimed repository-tracked source. |
 | `docs/prd.md`; `docs/baseline.md` | Product truth; especially PRD Resource management, atomicity, time/durability, AC-009/010/029/044; baseline §§12–13. |
 | `docs/architecture/001-initial-architecture.md` §§2, 4, 6–11, 13, 15 | READ COMMITTED, trusted actor, Resource locking, Account coordination compatibility, atomic history, lifecycle. Historical proposed clauses are read with later accepted contracts. |
 | `docs/architecture/002-my-bookings-and-cancellation.md` §§4–5 | Accepted owner-only cancellation and Resource → Booking locking. |
@@ -164,7 +164,7 @@ One experienced engineer; **1 engineer-day ≈ 6 focused hours**. Ranges include
 
 Installed `chunked-implementation` entrypoint and `core-safety-contract.md`, `execution-policy.md`, `delivery-execution-contract.md` were read, together with the single-plan contract/template/quality references. No executor version tag is supplied; inspected SHA-256 identities are:
 
-| Executor source under `/home/meriz/.agents/skills/chunked-implementation/` | SHA-256 |
+| Executor source under `/<REDACTED>/chunked-implementation/` | SHA-256 |
 | --- | --- |
 | `SKILL.md` | `b83fdc31d9710b356e66c5966fac003d2749aec8b27eeab2b22a0e1de102cc45` |
 | `references/core-safety-contract.md` | `4d5ed44e7b5823d7a005933bbf198cd391224e98cff57fb2c932cae1e83dd614` |
@@ -203,7 +203,7 @@ The embedded rules below make the plan usable without these private paths. Re-re
 
 ### Required commands, working directory and prerequisites
 
-All shell commands below are future execution, **not run in planning**. Working directory for every command is repository root `/home/meriz/Documents/Synctech.ID/CI_CD/labreserve`; container Go cwd is observed `/src`. Use RTK per installed shell discipline (proxy passthrough if filtering hides evidence). No new dependency installation or formatter is prescribed. Existing `.env` must be safely supplied/reviewed by operator without logging its contents. The Make entry point can create ignored `.env` if absent; record that side effect, never stage it.
+All shell commands below are future execution, **not run in planning**. Working directory for every command is repository root `/<REDACTED>/labreserve`; container Go cwd is observed `/src`. Use RTK per installed shell discipline (proxy passthrough if filtering hides evidence). No new dependency installation or formatter is prescribed. Existing `.env` must be safely supplied/reviewed by operator without logging its contents. The Make entry point can create ignored `.env` if absent; record that side effect, never stage it.
 
 For focused work, use the existing verification services in the separate `labreserve-verify` project only after checking it is not another worker's active project. A uniquely named disposable project is a Level 1 alternative if concurrent ownership conflicts; record it and use it consistently. Never point `testPool`/fault fixtures at demo/persistent data. Images copy source, not a bind mount: rebuild affected test/app images after changes so evidence tests the candidate rather than stale code.
 
