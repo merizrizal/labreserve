@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -559,12 +560,16 @@ func (tx *bookingRaceTransaction) Commit(ctx context.Context) error {
 }
 
 type resourceStateRaceRepository struct {
-	base           resources.StateRepository
-	started        chan<- int32
-	resourceLocked chan<- int32
-	beforeSet      *bookingRaceGate
-	afterOccupied  *bookingRaceGate
-	beforeCommit   *bookingRaceGate
+	base               resources.StateRepository
+	started            chan<- int32
+	resourceLocked     chan<- int32
+	afterResourceLock  *bookingRaceGate
+	beforeSet          *bookingRaceGate
+	afterOccupied      *bookingRaceGate
+	beforeCommit       *bookingRaceGate
+	stateCalls         *atomic.Int32
+	blockingChecks     *atomic.Int32
+	blockingTimeMicros *atomic.Int64
 }
 
 func (repository *resourceStateRaceRepository) BeginResourceStateChange(ctx context.Context) (resources.StateTransaction, error) {
@@ -588,20 +593,26 @@ func (repository *resourceStateRaceRepository) BeginResourceStateChange(ctx cont
 	}
 	return &resourceStateRaceTransaction{
 		StateTransaction: transaction, raw: concrete, pid: pid,
-		resourceLocked: repository.resourceLocked, beforeSet: repository.beforeSet,
-		afterOccupied: repository.afterOccupied, beforeCommit: repository.beforeCommit,
+		resourceLocked: repository.resourceLocked, afterResourceLock: repository.afterResourceLock,
+		beforeSet: repository.beforeSet, afterOccupied: repository.afterOccupied,
+		beforeCommit: repository.beforeCommit, stateCalls: repository.stateCalls,
+		blockingChecks: repository.blockingChecks, blockingTimeMicros: repository.blockingTimeMicros,
 	}, nil
 }
 
 type resourceStateRaceTransaction struct {
 	resources.StateTransaction
-	raw            *resourceStateTransaction
-	pid            int32
-	resourceLocked chan<- int32
-	beforeSet      *bookingRaceGate
-	afterOccupied  *bookingRaceGate
-	beforeCommit   *bookingRaceGate
-	expected       *resourceStateRaceExpectation
+	raw                *resourceStateTransaction
+	pid                int32
+	resourceLocked     chan<- int32
+	afterResourceLock  *bookingRaceGate
+	beforeSet          *bookingRaceGate
+	afterOccupied      *bookingRaceGate
+	beforeCommit       *bookingRaceGate
+	stateCalls         *atomic.Int32
+	blockingChecks     *atomic.Int32
+	blockingTimeMicros *atomic.Int64
+	expected           *resourceStateRaceExpectation
 }
 
 type resourceStateRaceExpectation struct {
@@ -617,11 +628,22 @@ func (tx *resourceStateRaceTransaction) LockResource(ctx context.Context, resour
 		if err := sendBookingRacePID(ctx, tx.resourceLocked, tx.pid); err != nil {
 			return resources.Resource{}, false, err
 		}
+		if tx.afterResourceLock != nil {
+			if err := tx.afterResourceLock.pause(ctx, tx.pid); err != nil {
+				return resources.Resource{}, false, err
+			}
+		}
 	}
 	return resource, found, err
 }
 
 func (tx *resourceStateRaceTransaction) HasBlockingBookings(ctx context.Context, resourceID string, operationTime time.Time) (bool, error) {
+	if tx.blockingChecks != nil {
+		tx.blockingChecks.Add(1)
+	}
+	if tx.blockingTimeMicros != nil {
+		tx.blockingTimeMicros.Store(operationTime.UnixMicro())
+	}
 	occupied, err := tx.StateTransaction.HasBlockingBookings(ctx, resourceID, operationTime)
 	if err != nil || !occupied {
 		return occupied, err
@@ -640,6 +662,9 @@ func (tx *resourceStateRaceTransaction) SetResourceState(
 	active bool,
 	occurredAt time.Time,
 ) (resources.Resource, bool, error) {
+	if tx.stateCalls != nil {
+		tx.stateCalls.Add(1)
+	}
 	if tx.beforeSet != nil {
 		if err := tx.beforeSet.pause(ctx, tx.pid); err != nil {
 			return resources.Resource{}, false, err
