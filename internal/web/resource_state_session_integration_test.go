@@ -2,11 +2,13 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -321,4 +323,38 @@ func webTestUUID(t *testing.T, migrationPool *pgxpool.Pool) string {
 		t.Fatalf("generate Resource state session fixture UUID: %v", err)
 	}
 	return id
+}
+
+func TestResourceStateSessionSurvivesPostRestart(t *testing.T) {
+	if os.Getenv("LABRESERVE_TEST_RESOURCE_STATE_RESTART_REPLAY") != "1" {
+		t.Skip("run by scripts/verify.sh after PostgreSQL and application restart")
+	}
+
+	runtimePool := webTestPool(t, "LABRESERVE_TEST_APP_DATABASE_URL")
+	store := database.NewStore(runtimePool)
+	now := time.Date(2040, time.January, 2, 3, 4, 5, 0, time.UTC)
+	authentication := auth.NewService(store, func() time.Time { return now })
+	token := strings.Repeat("A", base64.RawURLEncoding.EncodedLen(32))
+	session, found, err := authentication.Resolve(t.Context(), token)
+	if err != nil || !found || session.Identity == nil || session.AccountID == nil ||
+		session.Identity.ID != *session.AccountID || session.Identity.Login != "jordan@example.test" ||
+		session.Identity.Role != database.RoleCoordinator {
+		t.Fatalf("seeded Coordinator session did not survive restart: found=%v identity=%+v error=%v", found, session.Identity, err)
+	}
+
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://verify-app:8080/resources", nil)
+	if err != nil {
+		t.Fatalf("create request to restarted verification application: %v", err)
+	}
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	client := &http.Client{Timeout: 10 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("request existing resource list from restarted application: %v", err)
+	}
+	body := readAndClose(t, response)
+	if response.StatusCode != http.StatusOK || !strings.Contains(body, "DEMO-01 — Customer Demo Environment") ||
+		!strings.Contains(body, "Inactive") || !strings.Contains(body, "Jordan Lee") {
+		t.Fatalf("restarted app did not accept retained session/read inactive seeded Resource: status=%d body=%s", response.StatusCode, body)
+	}
 }
