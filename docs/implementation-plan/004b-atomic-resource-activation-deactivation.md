@@ -143,18 +143,18 @@ One experienced engineer; **1 engineer-day ≈ 6 focused hours**. Ranges include
 
 | Chunk | Bounded outcome | Depends on | Focused hours | State |
 | --- | --- | --- | --- | --- |
-| 0 | Discovery and baseline | Separate authorization/preflight | 3–5 | Not started |
-| 1 | Minimal fail-closed service contracts | 0 | 2–3 | Not started |
-| 2 | Guarded state capability and safe schema integration | 1 | 7–11 | Not started |
-| 3 | Activation vertical slice | 2 | 5–8 | Not started |
-| 4 | Safe deactivation and genuine no-ops | 3 | 6–10 | Not started |
-| 5 | Runtime privilege and trusted-session evidence | 4 | 5–8 | Not started |
-| 6 | Booking creation/deactivation races | 5 | 5–8 | Not started |
-| 7 | Owner cancellation/deactivation races | 6 | 4–7 | Not started |
-| 8 | State/edit serialization and rollback waiters | 7 | 6–10 | Not started |
-| 9 | Definite COMMIT rejection and ambiguous acknowledgement | 8 | 5–8 | Not started |
-| 10 | Retention/replay and migration/restart lifecycle integration | 9 | 6–10 | Not started |
-| 11 | Delivery-Wide Verification, Documentation, and Candidate Review | 10 | 4–7 | Not started |
+| 0 | Discovery and baseline | Separate authorization/preflight | 3–5 | Accepted |
+| 1 | Minimal fail-closed service contracts | 0 | 2–3 | Accepted |
+| 2 | Guarded state capability and safe schema integration | 1 | 7–11 | Accepted |
+| 3 | Activation vertical slice | 2 | 5–8 | Accepted |
+| 4 | Safe deactivation and genuine no-ops | 3 | 6–10 | Accepted |
+| 5 | Runtime privilege and trusted-session evidence | 4 | 5–8 | Accepted |
+| 6 | Booking creation/deactivation races | 5 | 5–8 | Accepted |
+| 7 | Owner cancellation/deactivation races | 6 | 4–7 | Accepted |
+| 8 | State/edit serialization and rollback waiters | 7 | 6–10 | Accepted |
+| 9 | Definite COMMIT rejection and ambiguous acknowledgement | 8 | 5–8 | Accepted |
+| 10 | Retention/replay and migration/restart lifecycle integration | 9 | 6–10 | Accepted |
+| 11 | Delivery-Wide Verification, Documentation, and Candidate Review | 10 | 4–7 | Accepted |
 
 **Total: 58–95 focused hours = 9⅔–15⅚ engineer-days.** Main uncertainty is deterministic negative/fault/commit/lifecycle fixture work, not routine boolean mutation. Material source drift or an incompatible persistent ledger requires re-estimation; no remediation effort is implicitly included.
 
@@ -484,19 +484,19 @@ Common per-chunk rules in sections 7–8 are part of **each** numbered chunk's c
 
 ## 10. Final acceptance and evidence obligations
 
-All boxes below remain unchecked until separately authorized execution supplies evidence.
+**Human acceptance:** `ACCEPTED` for final candidate `ffb295de170d4f20a38ebb426588d1a161833ca8`, based on the final independent recommendation and the acceptance decision recorded in [`docs/handoffs/task-004b-final-acceptance.md`](../handoffs/task-004b-final-acceptance.md). The checked items below record acceptance of Task 4B only; this does not authorize integration, deployment, persistent-target migration, or Task 4C.
 
-- [ ] Seven Task 4B objective outcomes and authorization → locked state → equality no-op → fresh actual-transition time/eligibility precedence hold, with explicit desired state and distinguishable safe outcomes (V1–V3).
-- [ ] Exact all-owner `confirmed AND end_at > fresh operation_time` post-lock separate query; no start/date/owner filter, stale snapshot, automatic Booking change or Resource→Account coordination lock (V3–V5).
-- [ ] No-op means no UPDATE, timestamp rewrite or event attempt at service **and** guarded capability; unauthorized no-op denied; raw retained data unchanged (V1–V2/V7–V8).
-- [ ] Each actual direction has exactly one correct atomic Resource event, actor/target/null Booking/old-new active/time equal updated_at; no events on rejects/no-ops (V2/V6).
-- [ ] Both creation/deactivation and cancellation/deactivation orders, same-account compatibility, fresh-time boundaries, repeated/opposite states, edit serialization and rollback waiter re-evaluation proved with independent real runtime PostgreSQL operations and deterministic barriers (V3–V5).
-- [ ] Both-direction Activity failure, outer rollback and **actual rejected COMMIT after statement success** retain neither partial mutation nor event; ambiguous committed/noncommitted acknowledgement paths remain operational unknown without blind retry/false rollback (V6).
-- [ ] Effective role/table/every-column/function/schema/ACL/shadow abuse checks prove no new bypass, direct Resource grant or generic mutator; existing trusted actor/time and cancellation limitations accurately retained (V8).
-- [ ] Fresh install, compatible merged-005→new upgrade, preserved 004→005 evidence, repeat migration, exact missing/unknown/mismatch refusal and immutable 001–005 source hashes verified with retained data/index/FK/capabilities (V8–V9).
-- [ ] Repeat seed/start and **actual PostgreSQL/application restarts** preserve exact changed state/events, seeded Inactive choice, accounts/sessions/Booking/request/cancellation/history; post-restart no-op/opposite operation works; old 4A/3B lifecycle still passes (V7–V9).
-- [ ] Focused checks then complete `make verify` pass with all required database/browser/lifecycle evidence actually executed; skipped/unrun checks cannot stand in for acceptance (V9).
-- [ ] README, complete diff and final evidence report cover actual candidate/source fingerprints, decisions, results, limitations and deferrals; no future-task scaffolding, unrelated overwrite, source-of-truth modification or credential exposure. Independent review is a separate fresh session, not implementation self-check (NFR-011).
+- [x] Seven Task 4B objective outcomes and authorization → locked state → equality no-op → fresh actual-transition time/eligibility precedence hold, with explicit desired state and distinguishable safe outcomes (V1–V3).
+- [x] Exact all-owner `confirmed AND end_at > fresh operation_time` post-lock separate query; no start/date/owner filter, stale snapshot, automatic Booking change or Resource→Account coordination lock (V3–V5).
+- [x] No-op means no UPDATE, timestamp rewrite or event attempt at service **and** guarded capability; unauthorized no-op denied; raw retained data unchanged (V1–V2/V7–V8).
+- [x] Each actual direction has exactly one correct atomic Resource event, actor/target/null Booking/old-new active/time equal updated_at; no events on rejects/no-ops (V2/V6).
+- [x] Both creation/deactivation and cancellation/deactivation orders, same-account compatibility, fresh-time boundaries, repeated/opposite states, edit serialization and rollback waiter re-evaluation proved with independent real runtime PostgreSQL operations and deterministic barriers (V3–V5).
+- [x] Both-direction Activity failure, outer rollback and **actual rejected COMMIT after statement success** retain neither partial mutation nor event; ambiguous committed/noncommitted acknowledgement paths remain operational unknown without blind retry/false rollback (V6).
+- [x] Effective role/table/every-column/function/schema/ACL/shadow abuse checks prove no new bypass, direct Resource grant or generic mutator; existing trusted actor/time and cancellation limitations accurately retained (V8).
+- [x] Fresh install, compatible merged-005→new upgrade, preserved 004→005 evidence, repeat migration, exact missing/unknown/mismatch refusal and immutable 001–005 source hashes verified with retained data/index/FK/capabilities (V8–V9).
+- [x] Repeat seed/start and **actual PostgreSQL/application restarts** preserve exact changed state/events, seeded Inactive choice, accounts/sessions/Booking/request/cancellation/history; post-restart no-op/opposite operation works; old 4A/3B lifecycle still passes (V7–V9).
+- [x] Focused checks then complete `make verify` pass with all required database/browser/lifecycle evidence actually executed; skipped/unrun checks cannot stand in for acceptance (V9).
+- [x] README, complete diff and final evidence report cover actual candidate/source fingerprints, decisions, results, limitations and deferrals; no future-task scaffolding, unrelated overwrite, source-of-truth modification or credential exposure. Independent review is a separate fresh session, not implementation self-check (NFR-011).
 
 ## 11. Migration prerequisites, risks and escalation boundaries
 
