@@ -425,6 +425,265 @@ func TestResourceStateDesiredStateNoOpsAndInactiveCreationPrecedence(t *testing.
 	}
 }
 
+func assertResourceStateStoredEngineer(t *testing.T, admin *pgxpool.Pool, accountID string) {
+	t.Helper()
+	var role string
+	if err := admin.QueryRow(t.Context(), `SELECT role FROM public.accounts WHERE id = $1::uuid`, accountID).Scan(&role); err != nil {
+		t.Fatalf("read stored Resource-state test account role: %v", err)
+	}
+	if role != "engineer" {
+		t.Fatalf("Resource-state test account %s has stored role %q, want engineer", accountID, role)
+	}
+}
+
+func resourceStateResourceBookingsAndHistorySnapshot(t *testing.T, admin *pgxpool.Pool, resourceID string) string {
+	t.Helper()
+	var snapshot string
+	if err := admin.QueryRow(t.Context(), `
+		SELECT COALESCE(
+			jsonb_agg(
+				jsonb_build_object(
+					'booking', to_jsonb(booking),
+					'activity', COALESCE((
+						SELECT jsonb_agg(to_jsonb(event) ORDER BY event.id)
+						FROM public.activity_events AS event WHERE event.booking_id = booking.id
+					), '[]'::jsonb)
+				) ORDER BY booking.id
+			), '[]'::jsonb
+		)::text
+		FROM public.bookings AS booking
+		WHERE booking.resource_id = $1::uuid`, resourceID).Scan(&snapshot); err != nil {
+		t.Fatalf("snapshot Resource %s Bookings and Activity: %v", resourceID, err)
+	}
+	return snapshot
+}
+
+func assertResourceStateDeactivationEligibility(t *testing.T, admin *pgxpool.Pool, resourceID string, operationAt time.Time) {
+	t.Helper()
+	var active bool
+	var blocking, pastConfirmed, futureCancelled int64
+	if err := admin.QueryRow(t.Context(), `
+		SELECT resource.active,
+		       count(booking.id) FILTER (WHERE booking.state = 'confirmed' AND booking.end_at > $2),
+		       count(booking.id) FILTER (WHERE booking.state = 'confirmed' AND booking.end_at <= $2),
+		       count(booking.id) FILTER (WHERE booking.state = 'cancelled' AND booking.end_at > $2)
+		FROM public.resources AS resource
+		LEFT JOIN public.bookings AS booking ON booking.resource_id = resource.id
+		WHERE resource.id = $1::uuid
+		GROUP BY resource.active`, resourceID, operationAt).Scan(&active, &blocking, &pastConfirmed, &futureCancelled); err != nil {
+		t.Fatalf("verify eligible deactivation fixture for Resource %s: %v", resourceID, err)
+	}
+	if !active || blocking != 0 || pastConfirmed == 0 || futureCancelled == 0 {
+		t.Fatalf("deactivation fixture is not eligible at %s: active=%v future Confirmed blockers=%d past Confirmed=%d future Cancelled=%d",
+			operationAt, active, blocking, pastConfirmed, futureCancelled)
+	}
+}
+
+func assertResourceStateDeactivationOccupied(t *testing.T, admin *pgxpool.Pool, resourceID string, operationAt time.Time) {
+	t.Helper()
+	var active, blocking bool
+	if err := admin.QueryRow(t.Context(), `
+		SELECT resource.active,
+		       EXISTS (
+		           SELECT 1 FROM public.bookings AS booking
+		           WHERE booking.resource_id = resource.id
+		             AND booking.state = 'confirmed'
+		             AND booking.end_at > $2
+		       )
+		FROM public.resources AS resource
+		WHERE resource.id = $1::uuid`, resourceID, operationAt).Scan(&active, &blocking); err != nil {
+		t.Fatalf("verify occupied deactivation fixture for Resource %s: %v", resourceID, err)
+	}
+	if !active || !blocking {
+		t.Fatalf("occupied deactivation fixture is not occupied at %s: active=%v future Confirmed blocker=%v",
+			operationAt, active, blocking)
+	}
+}
+
+func insertEligibleResourceStateDeactivationFixture(
+	t *testing.T,
+	admin *pgxpool.Pool,
+	fixtures *resourceCapabilityFixtures,
+	bookingIDs *[]string,
+	codePrefix string,
+	createdAt, operationAt time.Time,
+) string {
+	t.Helper()
+	resourceID := insertResourceCapabilityFixture(t, admin,
+		codePrefix+strings.ReplaceAll(testDatabaseUUID(t, admin), "-", ""),
+		"Eligible retained Resource", "Raw  eligible fixture text", true, createdAt)
+	fixtures.trackResource(resourceID)
+	pastConfirmedID := insertResourceStateBooking(t, admin, resourceID, fixtures.engineer,
+		operationAt.Add(-4*time.Hour), operationAt.Add(-2*time.Hour), createdAt, "confirmed", "")
+	futureCancelledID := insertResourceStateBooking(t, admin, resourceID, fixtures.secondEngineer,
+		operationAt.Add(time.Hour), operationAt.Add(2*time.Hour), createdAt, "cancelled", fixtures.secondEngineer)
+	*bookingIDs = append(*bookingIDs, pastConfirmedID, futureCancelledID)
+	insertResourceStateBookingHistory(t, admin, pastConfirmedID, fixtures.engineer, "confirmed", createdAt)
+	insertResourceStateBookingHistory(t, admin, futureCancelledID, fixtures.secondEngineer, "cancelled", createdAt)
+	assertResourceStateDeactivationEligibility(t, admin, resourceID, operationAt)
+	return resourceID
+}
+
+func TestResourceStateEngineerTransitionDenialMatrix(t *testing.T) {
+	admin, app, fixtures := resourceCreationSetup(t)
+	bookingIDs := registerResourceStateBookingCleanup(t, admin)
+	operationAt := time.Date(2040, time.January, 2, 3, 4, 5, 123456000, time.UTC)
+	createdAt := operationAt.Add(-24 * time.Hour)
+	clock := &atomicBookingClock{}
+	clock.Set(operationAt)
+	service := resources.NewStateService(NewStore(app), clock.Now)
+
+	var runtimeRole string
+	if err := app.QueryRow(t.Context(), `SELECT current_user`).Scan(&runtimeRole); err != nil {
+		t.Fatalf("read Resource-state service database role: %v", err)
+	}
+	if runtimeRole != "labreserve_app" {
+		t.Fatalf("Resource-state service matrix used database role %q, want labreserve_app", runtimeRole)
+	}
+
+	engineers := []struct {
+		name string
+		id   string
+	}{
+		{name: "Engineer 1", id: fixtures.engineer},
+		{name: "Engineer 2", id: fixtures.secondEngineer},
+	}
+	for _, engineer := range engineers {
+		assertResourceStateStoredEngineer(t, admin, engineer.id)
+	}
+	matrix := []struct {
+		name          string
+		initialActive bool
+		desiredActive bool
+	}{
+		{name: "Inactive to Active", initialActive: false, desiredActive: true},
+		{name: "Active to Inactive", initialActive: true, desiredActive: false},
+		{name: "Active to Active", initialActive: true, desiredActive: true},
+		{name: "Inactive to Inactive", initialActive: false, desiredActive: false},
+	}
+
+	for _, engineer := range engineers {
+		for _, test := range matrix {
+			t.Run(engineer.name+"/"+test.name, func(t *testing.T) {
+				resourceID := insertResourceCapabilityFixture(t, admin,
+					"State-Engineer-Matrix-"+strings.ReplaceAll(testDatabaseUUID(t, admin), "-", ""),
+					"Retained Engineer Matrix Resource", "Raw  descriptive text", test.initialActive, createdAt)
+				fixtures.trackResource(resourceID)
+				if _, err := admin.Exec(t.Context(), `
+					INSERT INTO public.activity_events (id, actor_account_id, action, occurred_at, resource_id, details)
+					VALUES (gen_random_uuid(), $1::uuid, 'resource.created', $2, $3::uuid,
+					        jsonb_build_object('active', $4::boolean, 'fixture', true))`,
+					fixtures.coordinator, createdAt, resourceID, test.initialActive); err != nil {
+					t.Fatalf("insert retained Resource Activity fixture: %v", err)
+				}
+
+				confirmedID := insertResourceStateBooking(t, admin, resourceID, engineer.id,
+					operationAt.Add(time.Hour), operationAt.Add(2*time.Hour), createdAt, "confirmed", "")
+				cancelledID := insertResourceStateBooking(t, admin, resourceID, engineer.id,
+					operationAt.Add(3*time.Hour), operationAt.Add(4*time.Hour), createdAt, "cancelled", engineer.id)
+				*bookingIDs = append(*bookingIDs, confirmedID, cancelledID)
+				insertResourceStateBookingHistory(t, admin, confirmedID, engineer.id, "confirmed", createdAt)
+				insertResourceStateBookingHistory(t, admin, cancelledID, engineer.id, "cancelled", createdAt)
+				if test.initialActive && !test.desiredActive {
+					assertResourceStateDeactivationOccupied(t, admin, resourceID, operationAt)
+				}
+
+				beforeResource, beforeEvents := resourceCapabilitySnapshot(t, admin, resourceID)
+				beforeBookings := resourceStateResourceBookingsAndHistorySnapshot(t, admin, resourceID)
+				result, err := service.SetState(t.Context(), resources.Actor{AccountID: engineer.id}, resources.StateRequest{
+					ResourceID: resourceID, Active: test.desiredActive,
+				})
+				if err != resources.ErrForbidden {
+					t.Fatalf("forbidden desired-state request result=%+v error=%v, want exact forbidden outcome without database diagnostics", result, err)
+				}
+				if result != (resources.StateResult{}) {
+					t.Fatalf("unauthorized state request returned a success result: %+v", result)
+				}
+				if clock.calls.Load() != 0 {
+					t.Fatalf("unauthorized state request sampled operation time %d times", clock.calls.Load())
+				}
+				afterResource, afterEvents := resourceCapabilitySnapshot(t, admin, resourceID)
+				if beforeResource != afterResource || beforeEvents != afterEvents {
+					t.Fatalf("forbidden request changed Resource or Resource Activity: before=%s %s after=%s %s",
+						beforeResource, beforeEvents, afterResource, afterEvents)
+				}
+				if afterBookings := resourceStateResourceBookingsAndHistorySnapshot(t, admin, resourceID); afterBookings != beforeBookings {
+					t.Fatalf("forbidden request changed Booking/request/cancellation/history data: before=%s after=%s", beforeBookings, afterBookings)
+				}
+			})
+		}
+	}
+}
+
+func TestResourceStateEngineerDenialForEligibleDeactivation(t *testing.T) {
+	admin, app, fixtures := resourceCreationSetup(t)
+	bookingIDs := registerResourceStateBookingCleanup(t, admin)
+	operationAt := time.Date(2040, time.January, 2, 3, 4, 5, 123456000, time.UTC)
+	createdAt := operationAt.Add(-24 * time.Hour)
+
+	controlResourceID := insertEligibleResourceStateDeactivationFixture(t, admin, fixtures, bookingIDs,
+		"State-Engineer-Control-", createdAt, operationAt)
+	controlBookingsBefore := resourceStateResourceBookingsAndHistorySnapshot(t, admin, controlResourceID)
+	controlService := resources.NewStateService(NewStore(app), func() time.Time { return operationAt })
+	control, err := controlService.SetState(t.Context(), resources.Actor{AccountID: fixtures.coordinator}, resources.StateRequest{
+		ResourceID: controlResourceID, Active: false,
+	})
+	if err != nil || !control.Changed || control.Resource.Active || !control.Resource.UpdatedAt.Equal(operationAt) {
+		t.Fatalf("eligible Coordinator deactivation positive control: result=%+v error=%v", control, err)
+	}
+	assertResourceStateEvent(t, admin, controlResourceID, fixtures.coordinator, "resource.deactivated", operationAt, true, false)
+	if after := resourceStateResourceBookingsAndHistorySnapshot(t, admin, controlResourceID); after != controlBookingsBefore {
+		t.Fatalf("Coordinator positive control changed retained Booking/history: before=%s after=%s", controlBookingsBefore, after)
+	}
+
+	engineers := []struct {
+		name string
+		id   string
+	}{
+		{name: "Engineer 1", id: fixtures.engineer},
+		{name: "Engineer 2", id: fixtures.secondEngineer},
+	}
+	for _, engineer := range engineers {
+		assertResourceStateStoredEngineer(t, admin, engineer.id)
+	}
+	clock := &atomicBookingClock{}
+	clock.Set(operationAt)
+	service := resources.NewStateService(NewStore(app), clock.Now)
+	for _, engineer := range engineers {
+		t.Run(engineer.name, func(t *testing.T) {
+			resourceID := insertEligibleResourceStateDeactivationFixture(t, admin, fixtures, bookingIDs,
+				"State-Engineer-Eligible-", createdAt, operationAt)
+			beforeResource, beforeEvents := resourceCapabilitySnapshot(t, admin, resourceID)
+			beforeBookings := resourceStateResourceBookingsAndHistorySnapshot(t, admin, resourceID)
+			installResourceUpdateFailureTrigger(t, admin, resourceID)
+			removeActivityFailure := installResourceActivityFailureTrigger(t, admin, engineer.id, "resource.deactivated")
+			clockCallsBefore := clock.calls.Load()
+			result, err := service.SetState(t.Context(), resources.Actor{AccountID: engineer.id}, resources.StateRequest{
+				ResourceID: resourceID, Active: false,
+			})
+			removeActivityFailure()
+			if err != resources.ErrForbidden {
+				t.Fatalf("eligible Active to Inactive request error=%v, want exact ErrForbidden", err)
+			}
+			if result != (resources.StateResult{}) {
+				t.Fatalf("forbidden eligible deactivation returned a successful state result: %+v", result)
+			}
+			if clock.calls.Load() != clockCallsBefore {
+				t.Fatalf("forbidden eligible deactivation read operation time: clock calls %d -> %d", clockCallsBefore, clock.calls.Load())
+			}
+			afterResource, afterEvents := resourceCapabilitySnapshot(t, admin, resourceID)
+			if beforeResource != afterResource || beforeEvents != afterEvents {
+				t.Fatalf("forbidden eligible deactivation changed Resource/Activity: before=%s %s after=%s %s",
+					beforeResource, beforeEvents, afterResource, afterEvents)
+			}
+			if afterBookings := resourceStateResourceBookingsAndHistorySnapshot(t, admin, resourceID); afterBookings != beforeBookings {
+				t.Fatalf("forbidden eligible deactivation changed Booking/request/cancellation/history: before=%s after=%s",
+					beforeBookings, afterBookings)
+			}
+		})
+	}
+}
+
 func TestResourceStateDeactivationOccupancyAndEndBoundary(t *testing.T) {
 	admin, app, fixtures := resourceCreationSetup(t)
 	bookingIDs := registerResourceStateBookingCleanup(t, admin)

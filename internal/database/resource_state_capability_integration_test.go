@@ -114,6 +114,13 @@ func TestResourceStateCapabilityTransitionsNoOpsAndAuthorization(t *testing.T) {
 		t.Fatalf("apply Resource state capability migration: %v", err)
 	}
 	runtime := testPool(t, "LABRESERVE_TEST_APP_DATABASE_URL")
+	var runtimeRole string
+	if err := runtime.QueryRow(t.Context(), `SELECT current_user`).Scan(&runtimeRole); err != nil {
+		t.Fatalf("read guarded Resource-state capability database role: %v", err)
+	}
+	if runtimeRole != "labreserve_app" {
+		t.Fatalf("guarded Resource-state capability tests used database role %q, want labreserve_app", runtimeRole)
+	}
 	fixtures := newResourceCapabilityFixtures(t, admin)
 	bookingIDs := registerResourceStateBookingCleanup(t, admin)
 	createdAt := time.Date(2040, time.January, 2, 3, 4, 5, 123456000, time.UTC)
@@ -210,6 +217,154 @@ func TestResourceStateCapabilityTransitionsNoOpsAndAuthorization(t *testing.T) {
 	unknownResourceID := testDatabaseUUID(t, admin)
 	if _, err := callSetResourceStateCapability(t.Context(), runtime, fixtures.coordinator, unknownResourceID, false, operationAt); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("unknown Resource result error = %v, want no row", err)
+	}
+}
+
+func TestResourceStateCapabilityRejectsEngineerTransitions(t *testing.T) {
+	admin := testPool(t, "LABRESERVE_TEST_DATABASE_URL")
+	if err := Migrate(t.Context(), admin); err != nil {
+		t.Fatalf("apply Resource state capability migration: %v", err)
+	}
+	runtime := testPool(t, "LABRESERVE_TEST_APP_DATABASE_URL")
+	var runtimeRole string
+	if err := runtime.QueryRow(t.Context(), `SELECT current_user`).Scan(&runtimeRole); err != nil {
+		t.Fatalf("read guarded Resource-state capability database role: %v", err)
+	}
+	if runtimeRole != "labreserve_app" {
+		t.Fatalf("guarded Resource-state capability tests used database role %q, want labreserve_app", runtimeRole)
+	}
+	fixtures := newResourceCapabilityFixtures(t, admin)
+	bookingIDs := registerResourceStateBookingCleanup(t, admin)
+	operationAt := time.Date(2040, time.January, 2, 3, 4, 5, 123456000, time.UTC)
+	createdAt := operationAt.Add(-24 * time.Hour)
+	engineers := []struct {
+		name string
+		id   string
+	}{
+		{name: "Engineer 1", id: fixtures.engineer},
+		{name: "Engineer 2", id: fixtures.secondEngineer},
+	}
+	for _, engineer := range engineers {
+		assertResourceStateStoredEngineer(t, admin, engineer.id)
+	}
+	transitions := []struct {
+		name          string
+		initialActive bool
+		desiredActive bool
+	}{
+		{name: "Inactive to Active", initialActive: false, desiredActive: true},
+		{name: "Active to Inactive", initialActive: true, desiredActive: false},
+	}
+
+	for _, engineer := range engineers {
+		for _, transition := range transitions {
+			t.Run(engineer.name+"/"+transition.name, func(t *testing.T) {
+				resourceID := insertResourceCapabilityFixture(t, admin,
+					"State-Capability-Engineer-"+strings.ReplaceAll(testDatabaseUUID(t, admin), "-", ""),
+					"Retained Engineer Capability Resource", "Raw  descriptive text", transition.initialActive, createdAt)
+				fixtures.trackResource(resourceID)
+				confirmedID := insertResourceStateBooking(t, admin, resourceID, engineer.id,
+					operationAt.Add(time.Hour), operationAt.Add(2*time.Hour), createdAt, "confirmed", "")
+				cancelledID := insertResourceStateBooking(t, admin, resourceID, engineer.id,
+					operationAt.Add(3*time.Hour), operationAt.Add(4*time.Hour), createdAt, "cancelled", engineer.id)
+				*bookingIDs = append(*bookingIDs, confirmedID, cancelledID)
+				insertResourceStateBookingHistory(t, admin, confirmedID, engineer.id, "confirmed", createdAt)
+				insertResourceStateBookingHistory(t, admin, cancelledID, engineer.id, "cancelled", createdAt)
+				if transition.initialActive && !transition.desiredActive {
+					assertResourceStateDeactivationOccupied(t, admin, resourceID, operationAt)
+				}
+
+				beforeResource, beforeEvents := resourceCapabilitySnapshot(t, admin, resourceID)
+				beforeBookings := resourceStateResourceBookingsAndHistorySnapshot(t, admin, resourceID)
+				result, err := callSetResourceStateCapability(t.Context(), runtime, engineer.id, resourceID,
+					transition.desiredActive, operationAt)
+				if err == nil {
+					t.Fatalf("stored Engineer %s successfully changed Resource state: %+v", engineer.name, result)
+				}
+				assertResourceCapabilityErrorCode(t, err, "42501")
+				if result != (resourceCapabilityRow{}) {
+					t.Fatalf("forbidden capability call returned a success result: %+v", result)
+				}
+				afterResource, afterEvents := resourceCapabilitySnapshot(t, admin, resourceID)
+				if beforeResource != afterResource || beforeEvents != afterEvents {
+					t.Fatalf("forbidden capability call changed Resource or Activity: before=%s %s after=%s %s",
+						beforeResource, beforeEvents, afterResource, afterEvents)
+				}
+				if afterBookings := resourceStateResourceBookingsAndHistorySnapshot(t, admin, resourceID); afterBookings != beforeBookings {
+					t.Fatalf("forbidden capability call changed Booking/request/cancellation/history data: before=%s after=%s",
+						beforeBookings, afterBookings)
+				}
+			})
+		}
+	}
+}
+
+func TestResourceStateCapabilityRejectsEngineerEligibleDeactivation(t *testing.T) {
+	admin := testPool(t, "LABRESERVE_TEST_DATABASE_URL")
+	if err := Migrate(t.Context(), admin); err != nil {
+		t.Fatalf("apply Resource state capability migration: %v", err)
+	}
+	runtime := testPool(t, "LABRESERVE_TEST_APP_DATABASE_URL")
+	var runtimeRole string
+	if err := runtime.QueryRow(t.Context(), `SELECT current_user`).Scan(&runtimeRole); err != nil {
+		t.Fatalf("read guarded Resource-state capability database role: %v", err)
+	}
+	if runtimeRole != "labreserve_app" {
+		t.Fatalf("guarded Resource-state capability tests used database role %q, want labreserve_app", runtimeRole)
+	}
+	fixtures := newResourceCapabilityFixtures(t, admin)
+	bookingIDs := registerResourceStateBookingCleanup(t, admin)
+	operationAt := time.Date(2040, time.January, 2, 3, 4, 5, 123456000, time.UTC)
+	createdAt := operationAt.Add(-24 * time.Hour)
+
+	controlResourceID := insertEligibleResourceStateDeactivationFixture(t, admin, fixtures, bookingIDs,
+		"State-Capability-Control-", createdAt, operationAt)
+	controlBookingsBefore := resourceStateResourceBookingsAndHistorySnapshot(t, admin, controlResourceID)
+	control, err := callSetResourceStateCapability(t.Context(), runtime, fixtures.coordinator,
+		controlResourceID, false, operationAt)
+	if err != nil || !control.Changed || control.Active || !control.UpdatedAt.Equal(operationAt) {
+		t.Fatalf("eligible Coordinator capability positive control: result=%+v error=%v", control, err)
+	}
+	assertResourceStateEvent(t, admin, controlResourceID, fixtures.coordinator, "resource.deactivated", operationAt, true, false)
+	if after := resourceStateResourceBookingsAndHistorySnapshot(t, admin, controlResourceID); after != controlBookingsBefore {
+		t.Fatalf("Coordinator positive control changed retained Booking/history: before=%s after=%s", controlBookingsBefore, after)
+	}
+
+	engineers := []struct {
+		name string
+		id   string
+	}{
+		{name: "Engineer 1", id: fixtures.engineer},
+		{name: "Engineer 2", id: fixtures.secondEngineer},
+	}
+	for _, engineer := range engineers {
+		assertResourceStateStoredEngineer(t, admin, engineer.id)
+		t.Run(engineer.name, func(t *testing.T) {
+			resourceID := insertEligibleResourceStateDeactivationFixture(t, admin, fixtures, bookingIDs,
+				"State-Capability-Engineer-", createdAt, operationAt)
+			beforeResource, beforeEvents := resourceCapabilitySnapshot(t, admin, resourceID)
+			beforeBookings := resourceStateResourceBookingsAndHistorySnapshot(t, admin, resourceID)
+			installResourceUpdateFailureTrigger(t, admin, resourceID)
+			removeActivityFailure := installResourceActivityFailureTrigger(t, admin, engineer.id, "resource.deactivated")
+			result, err := callSetResourceStateCapability(t.Context(), runtime, engineer.id, resourceID, false, operationAt)
+			removeActivityFailure()
+			if err == nil {
+				t.Fatalf("stored Engineer %s successfully invoked eligible deactivation capability: %+v", engineer.name, result)
+			}
+			assertResourceCapabilityErrorCode(t, err, "42501")
+			if result != (resourceCapabilityRow{}) {
+				t.Fatalf("forbidden capability call returned a successful state result: %+v", result)
+			}
+			afterResource, afterEvents := resourceCapabilitySnapshot(t, admin, resourceID)
+			if beforeResource != afterResource || beforeEvents != afterEvents {
+				t.Fatalf("forbidden eligible capability call changed Resource/Activity: before=%s %s after=%s %s",
+					beforeResource, beforeEvents, afterResource, afterEvents)
+			}
+			if afterBookings := resourceStateResourceBookingsAndHistorySnapshot(t, admin, resourceID); afterBookings != beforeBookings {
+				t.Fatalf("forbidden eligible capability call changed Booking/request/cancellation/history: before=%s after=%s",
+					beforeBookings, afterBookings)
+			}
+		})
 	}
 }
 

@@ -79,19 +79,33 @@ func TestResourceStateSessionUsesResolvedLiveIdentityAndPreservesReads(t *testin
 	roleChangeResourceID := insertResourceStateSessionResource(t, migrationPool,
 		"Session-Role-"+strings.ReplaceAll(webTestUUID(t, migrationPool), "-", ""),
 		"Role Change Lab", "Role fixture", true, now)
+	inactiveTransitionResourceID := insertResourceStateSessionResource(t, migrationPool,
+		"Session-Inactive-"+strings.ReplaceAll(webTestUUID(t, migrationPool), "-", ""),
+		"Inactive Transition Lab", "Inactive state fixture", false, now)
+	eligibleDeactivationResourceID := insertResourceStateSessionResource(t, migrationPool,
+		"Session-Eligible-"+strings.ReplaceAll(webTestUUID(t, migrationPool), "-", ""),
+		"Eligible Deactivation Lab", "Retained cancelled Booking fixture", true, now)
+	coordinatorControlResourceID := insertResourceStateSessionResource(t, migrationPool,
+		"Session-Control-"+strings.ReplaceAll(webTestUUID(t, migrationPool), "-", ""),
+		"Coordinator Control Lab", "Eligible control fixture", true, now)
 	bookingID := ""
+	eligibleCancelledBookingID := ""
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if bookingID != "" {
-			if _, err := migrationPool.Exec(cleanupCtx, "DELETE FROM public.activity_events WHERE booking_id = $1::uuid", bookingID); err != nil {
+		for _, id := range []string{bookingID, eligibleCancelledBookingID} {
+			if id == "" {
+				continue
+			}
+			if _, err := migrationPool.Exec(cleanupCtx, "DELETE FROM public.activity_events WHERE booking_id = $1::uuid", id); err != nil {
 				t.Errorf("delete session test Booking Activity: %v", err)
 			}
-			if _, err := migrationPool.Exec(cleanupCtx, "DELETE FROM public.bookings WHERE id = $1::uuid", bookingID); err != nil {
+			if _, err := migrationPool.Exec(cleanupCtx, "DELETE FROM public.bookings WHERE id = $1::uuid", id); err != nil {
 				t.Errorf("delete session test Booking: %v", err)
 			}
 		}
-		for _, id := range []string{resourceID, roleChangeResourceID} {
+		for _, id := range []string{resourceID, roleChangeResourceID, inactiveTransitionResourceID,
+			eligibleDeactivationResourceID, coordinatorControlResourceID} {
 			if _, err := migrationPool.Exec(cleanupCtx, "DELETE FROM public.activity_events WHERE resource_id = $1::uuid", id); err != nil {
 				t.Errorf("delete session test Resource Activity: %v", err)
 			}
@@ -146,6 +160,33 @@ func TestResourceStateSessionUsesResolvedLiveIdentityAndPreservesReads(t *testin
 	}
 	bookingID = createdBooking.Booking.ID
 
+	eligibleBooking, err := bookings.NewService(store, clock).Create(t.Context(), bookings.Actor{AccountID: samSession.Identity.ID}, bookings.CreateRequest{
+		ResourceID: eligibleDeactivationResourceID, RequestID: webTestUUID(t, migrationPool),
+		StartAt: now.Add(4 * time.Hour), EndAt: now.Add(5 * time.Hour), Purpose: "retained future cancelled eligibility fixture",
+	})
+	if err != nil || eligibleBooking.Replayed {
+		t.Fatalf("create retained Booking for eligible deactivation fixture: result=%+v error=%v", eligibleBooking, err)
+	}
+	eligibleCancelledBookingID = eligibleBooking.Booking.ID
+	cancelled, err := bookings.NewCancellationService(store, clock).Cancel(t.Context(), bookings.Actor{AccountID: samSession.Identity.ID}, eligibleCancelledBookingID)
+	if err != nil || !cancelled.Changed || cancelled.Booking.State != bookings.StateCancelled {
+		t.Fatalf("retain future Cancelled Booking for eligible deactivation fixture: result=%+v error=%v", cancelled, err)
+	}
+	assertResourceStateSessionDeactivationEligibility(t, migrationPool, eligibleDeactivationResourceID, now, true)
+
+	assertResourceStateSessionDeactivationEligibility(t, migrationPool, coordinatorControlResourceID, now, false)
+	controlBefore := resourceStateSessionPersistedSnapshot(t, migrationPool, coordinatorControlResourceID)
+	controlResult, err := setResourceStateFromLiveSession(t.Context(), authentication, coordinatorToken, stateService,
+		resources.StateRequest{ResourceID: coordinatorControlResourceID, Active: false})
+	if err != nil || !controlResult.Changed || controlResult.Resource.Active || !controlResult.Resource.UpdatedAt.Equal(now) {
+		t.Fatalf("eligible live Coordinator deactivation positive control: result=%+v error=%v", controlResult, err)
+	}
+	controlAfter := resourceStateSessionPersistedSnapshot(t, migrationPool, coordinatorControlResourceID)
+	if controlBefore[0] == controlAfter[0] || controlBefore[1] == controlAfter[1] {
+		t.Fatalf("eligible Coordinator positive control did not persist its Resource/Activity transition: before=%v after=%v",
+			controlBefore, controlAfter)
+	}
+
 	for _, engineer := range []struct {
 		name  string
 		token string
@@ -153,14 +194,40 @@ func TestResourceStateSessionUsesResolvedLiveIdentityAndPreservesReads(t *testin
 		{name: "Alex", token: alexToken},
 		{name: "Sam", token: samToken},
 	} {
-		t.Run(engineer.name+" cannot use a claimed Coordinator role", func(t *testing.T) {
-			beforeCalls := stateService.calls
-			result, err := setResourceStateFromLiveSession(t.Context(), authentication, engineer.token, stateService,
-				resources.StateRequest{ResourceID: resourceID, Active: true})
-			if !errors.Is(err, resources.ErrForbidden) || result.Changed || stateService.calls != beforeCalls+1 {
-				t.Fatalf("tampered role changed authority: result=%+v calls=%d->%d error=%v", result, beforeCalls, stateService.calls, err)
-			}
-		})
+		resolvedEngineer, found, err := authentication.Resolve(t.Context(), engineer.token)
+		if err != nil || !found || resolvedEngineer.Identity == nil || resolvedEngineer.AccountID == nil ||
+			resolvedEngineer.Identity.ID != *resolvedEngineer.AccountID || resolvedEngineer.Identity.Role != database.RoleEngineer {
+			t.Fatalf("resolve stored Engineer identity for %s: found=%v session=%+v error=%v", engineer.name, found, resolvedEngineer, err)
+		}
+		for _, request := range []struct {
+			name       string
+			resourceID string
+			active     bool
+			eligible   bool
+		}{
+			{name: "Active to Inactive", resourceID: resourceID, active: false},
+			{name: "Eligible Active to Inactive", resourceID: eligibleDeactivationResourceID, active: false, eligible: true},
+			{name: "Inactive to Active", resourceID: inactiveTransitionResourceID, active: true},
+			{name: "Active to Active", resourceID: resourceID, active: true},
+			{name: "Inactive to Inactive", resourceID: inactiveTransitionResourceID, active: false},
+		} {
+			t.Run(engineer.name+"/"+request.name, func(t *testing.T) {
+				if request.eligible {
+					assertResourceStateSessionDeactivationEligibility(t, migrationPool, request.resourceID, now, true)
+				}
+				before := resourceStateSessionPersistedSnapshot(t, migrationPool, request.resourceID)
+				beforeCalls := stateService.calls
+				result, err := setResourceStateFromLiveSession(t.Context(), authentication, engineer.token, stateService,
+					resources.StateRequest{ResourceID: request.resourceID, Active: request.active})
+				if err != resources.ErrForbidden || result != (resources.StateResult{}) || stateService.calls != beforeCalls+1 {
+					t.Fatalf("stored Engineer session state request result=%+v calls=%d->%d error=%v, want exact forbidden outcome",
+						result, beforeCalls, stateService.calls, err)
+				}
+				if after := resourceStateSessionPersistedSnapshot(t, migrationPool, request.resourceID); after != before {
+					t.Fatalf("forbidden Engineer session request changed Resource/Booking/Activity state: before=%v after=%v", before, after)
+				}
+			})
+		}
 	}
 
 	for _, read := range []struct {
@@ -325,6 +392,60 @@ func webTestUUID(t *testing.T, migrationPool *pgxpool.Pool) string {
 	return id
 }
 
+func resourceStateSessionPersistedSnapshot(t *testing.T, pool *pgxpool.Pool, resourceID string) [3]string {
+	t.Helper()
+	var snapshot [3]string
+	if err := pool.QueryRow(t.Context(), `
+		SELECT to_jsonb(resource)::text,
+		       COALESCE((
+		           SELECT jsonb_agg(to_jsonb(event) ORDER BY event.id)::text
+		           FROM public.activity_events AS event WHERE event.resource_id = resource.id
+		       ), '[]'),
+		       COALESCE((
+		           SELECT jsonb_agg(
+		               jsonb_build_object(
+		                   'booking', to_jsonb(booking),
+		                   'activity', COALESCE((
+		                       SELECT jsonb_agg(to_jsonb(booking_event) ORDER BY booking_event.id)
+		                       FROM public.activity_events AS booking_event WHERE booking_event.booking_id = booking.id
+		                   ), '[]'::jsonb)
+		               ) ORDER BY booking.id
+		           )::text
+		           FROM public.bookings AS booking WHERE booking.resource_id = resource.id
+		       ), '[]')
+		FROM public.resources AS resource
+		WHERE resource.id = $1::uuid`, resourceID).Scan(&snapshot[0], &snapshot[1], &snapshot[2]); err != nil {
+		t.Fatalf("snapshot session-test Resource, Bookings, and Activity: %v", err)
+	}
+	return snapshot
+}
+
+func assertResourceStateSessionDeactivationEligibility(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	resourceID string,
+	operationAt time.Time,
+	requireFutureCancelled bool,
+) {
+	t.Helper()
+	var active bool
+	var blocking, futureCancelled int64
+	if err := pool.QueryRow(t.Context(), `
+		SELECT resource.active,
+		       count(booking.id) FILTER (WHERE booking.state = 'confirmed' AND booking.end_at > $2),
+		       count(booking.id) FILTER (WHERE booking.state = 'cancelled' AND booking.end_at > $2)
+		FROM public.resources AS resource
+		LEFT JOIN public.bookings AS booking ON booking.resource_id = resource.id
+		WHERE resource.id = $1::uuid
+		GROUP BY resource.active`, resourceID, operationAt).Scan(&active, &blocking, &futureCancelled); err != nil {
+		t.Fatalf("verify live-session deactivation eligibility for Resource %s: %v", resourceID, err)
+	}
+	if !active || blocking != 0 || (requireFutureCancelled && futureCancelled == 0) {
+		t.Fatalf("live-session fixture is not eligible at %s: active=%v future Confirmed blockers=%d future Cancelled=%d require future Cancelled=%v",
+			operationAt, active, blocking, futureCancelled, requireFutureCancelled)
+	}
+}
+
 func TestResourceStateSessionSurvivesPostRestart(t *testing.T) {
 	if os.Getenv("LABRESERVE_TEST_RESOURCE_STATE_RESTART_REPLAY") != "1" {
 		t.Skip("run by scripts/verify.sh after PostgreSQL and application restart")
@@ -354,7 +475,29 @@ func TestResourceStateSessionSurvivesPostRestart(t *testing.T) {
 	}
 	body := readAndClose(t, response)
 	if response.StatusCode != http.StatusOK || !strings.Contains(body, "DEMO-01 — Customer Demo Environment") ||
-		!strings.Contains(body, "Inactive") || !strings.Contains(body, "Jordan Lee") {
-		t.Fatalf("restarted app did not accept retained session/read inactive seeded Resource: status=%d body=%s", response.StatusCode, body)
+		!strings.Contains(body, "Jordan Lee") {
+		t.Fatalf("restarted app did not accept retained session/read seeded Resource list: status=%d body=%s", response.StatusCode, body)
+	}
+
+	var demoResourceID string
+	if err := runtimePool.QueryRow(t.Context(), `SELECT id::text FROM public.resources WHERE code = 'DEMO-01'`).Scan(&demoResourceID); err != nil {
+		t.Fatalf("resolve seeded DEMO-01 Resource for its detail view: %v", err)
+	}
+	detailRequest, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		"http://verify-app:8080/resources/"+demoResourceID, nil)
+	if err != nil {
+		t.Fatalf("create request to restarted DEMO-01 detail view: %v", err)
+	}
+	detailRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	detailResponse, err := client.Do(detailRequest)
+	if err != nil {
+		t.Fatalf("request DEMO-01 detail from restarted verification application: %v", err)
+	}
+	detailBody := readAndClose(t, detailResponse)
+	if detailResponse.StatusCode != http.StatusOK ||
+		!strings.Contains(detailBody, "<h1>DEMO-01 — Customer Demo Environment</h1>") ||
+		!strings.Contains(detailBody, `<p class="state inactive">Inactive</p>`) {
+		t.Fatalf("restarted DEMO-01 detail did not bind its persisted inactive state to that Resource: status=%d body=%s",
+			detailResponse.StatusCode, detailBody)
 	}
 }
