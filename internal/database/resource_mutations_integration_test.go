@@ -579,6 +579,7 @@ func TestResourceCapabilitiesExposeOnlyGuardedRuntimeWrites(t *testing.T) {
 	}{
 		{name: "public.labreserve_create_resource", signature: "public.labreserve_create_resource(uuid,text,text,text,boolean,timestamp with time zone)"},
 		{name: "public.labreserve_edit_resource", signature: "public.labreserve_edit_resource(uuid,uuid,text,text,timestamp with time zone)"},
+		{name: "public.labreserve_set_resource_state", signature: "public.labreserve_set_resource_state(uuid,uuid,boolean,timestamp with time zone)"},
 	} {
 		var securityDefiner, ownerSuperuser, runtimeExecute, publicExecute, otherExecute, grantOption, schemaCreate, ownerMembership bool
 		var owner, searchPath string
@@ -624,6 +625,17 @@ func TestResourceCapabilitiesExposeOnlyGuardedRuntimeWrites(t *testing.T) {
 				function.name, securityDefiner, owner, ownerSuperuser, runtimeExecute, publicExecute,
 				otherExecute, grantOption, searchPath, schemaCreate, ownerMembership)
 		}
+	}
+	var stateCapabilityCount int
+	if err := adminPool.QueryRow(t.Context(), `
+		SELECT count(*)
+		FROM pg_catalog.pg_proc AS procedure
+		JOIN pg_catalog.pg_namespace AS function_schema ON function_schema.oid = procedure.pronamespace
+		WHERE function_schema.nspname = 'public' AND procedure.proname = 'labreserve_set_resource_state'`).Scan(&stateCapabilityCount); err != nil {
+		t.Fatalf("count guarded Resource state capabilities: %v", err)
+	}
+	if stateCapabilityCount != 1 {
+		t.Fatalf("Resource state capability overload count = %d, want exactly one guarded signature", stateCapabilityCount)
 	}
 	var canUpdateActivity, canDeleteActivity, canTruncateActivity bool
 	if err := runtimePool.QueryRow(t.Context(), `
@@ -694,6 +706,8 @@ func TestResourceCapabilitiesExposeOnlyGuardedRuntimeWrites(t *testing.T) {
 		{name: "create public function", sql: `CREATE FUNCTION public.labreserve_runtime_probe() RETURNS integer LANGUAGE SQL AS $$ SELECT 1 $$`},
 		{name: "replace Resource capability", sql: `CREATE OR REPLACE FUNCTION public.labreserve_create_resource(UUID, TEXT, TEXT, TEXT, BOOLEAN, TIMESTAMPTZ) RETURNS TABLE(resource_id UUID, code TEXT, name TEXT, description TEXT, active BOOLEAN, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ) LANGUAGE SQL AS $$ SELECT NULL::UUID, NULL::TEXT, NULL::TEXT, NULL::TEXT, NULL::BOOLEAN, NULL::TIMESTAMPTZ, NULL::TIMESTAMPTZ $$`},
 		{name: "alter Resource capability", sql: `ALTER FUNCTION public.labreserve_create_resource(UUID, TEXT, TEXT, TEXT, BOOLEAN, TIMESTAMPTZ) RESET search_path`},
+		{name: "replace Resource state capability", sql: `CREATE OR REPLACE FUNCTION public.labreserve_set_resource_state(UUID, UUID, BOOLEAN, TIMESTAMPTZ) RETURNS TABLE(resource_id UUID, code TEXT, name TEXT, description TEXT, active BOOLEAN, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, changed BOOLEAN) LANGUAGE SQL AS $$ SELECT NULL::UUID, NULL::TEXT, NULL::TEXT, NULL::TEXT, NULL::BOOLEAN, NULL::TIMESTAMPTZ, NULL::TIMESTAMPTZ, NULL::BOOLEAN $$`},
+		{name: "alter Resource state capability", sql: `ALTER FUNCTION public.labreserve_set_resource_state(UUID, UUID, BOOLEAN, TIMESTAMPTZ) RESET search_path`},
 	} {
 		t.Run(statement.name, func(t *testing.T) {
 			assertRuntimeStatementDenied(t, runtimePool, statement.sql)
@@ -727,16 +741,21 @@ func TestResourceCapabilityMigrationPreservesVersion004Data(t *testing.T) {
 		t.Fatalf("read migration checksums: %v", err)
 	}
 	var capabilityMigration *migrationChecksum
-	var version004 []migrationChecksum
+	var version004, migrationsThrough005 []migrationChecksum
 	for index := range migrations {
-		if migrations[index].version == requiredSchemaVersion {
-			capabilityMigration = &migrations[index]
-		} else {
-			version004 = append(version004, migrations[index])
+		if migrations[index].version == "006_resource_state.sql" {
+			break
 		}
+		migrationsThrough005 = append(migrationsThrough005, migrations[index])
+		if migrations[index].version == "005_resource_mutations.sql" {
+			capabilityMigration = &migrations[index]
+			continue
+		}
+		version004 = append(version004, migrations[index])
 	}
-	if capabilityMigration == nil || len(version004) != 4 {
-		t.Fatalf("migration ladder has capability=%v and %d pre-capability versions; want 1 and 4", capabilityMigration != nil, len(version004))
+	if capabilityMigration == nil || len(version004) != 4 || len(migrationsThrough005) != 5 {
+		t.Fatalf("migration ladder has Migration 005=%v, %d pre-capability versions, and %d versions through 005; want 1, 4, and 5",
+			capabilityMigration != nil, len(version004), len(migrationsThrough005))
 	}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -785,6 +804,12 @@ func TestResourceCapabilityMigrationPreservesVersion004Data(t *testing.T) {
 		t.Fatalf("create migration-004 session fixture: %v", err)
 	}
 
+	if _, err := tx.Exec(ctx, "DROP FUNCTION public.labreserve_set_resource_state(UUID, UUID, BOOLEAN, TIMESTAMPTZ)"); err != nil {
+		t.Fatalf("remove current state capability in the Migration 004 simulation: %v", err)
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM public.schema_migrations WHERE version = '006_resource_state.sql'"); err != nil {
+		t.Fatalf("simulate Migration 004 ledger without Migration 006: %v", err)
+	}
 	if _, err := tx.Exec(ctx, "DROP FUNCTION public.labreserve_create_resource(UUID, TEXT, TEXT, TEXT, BOOLEAN, TIMESTAMPTZ)"); err != nil {
 		t.Fatalf("remove current creation capability in simulation: %v", err)
 	}
@@ -805,8 +830,8 @@ func TestResourceCapabilityMigrationPreservesVersion004Data(t *testing.T) {
 		capabilityMigration.version, capabilityMigration.checksum); err != nil {
 		t.Fatalf("record additive Resource capability migration: %v", err)
 	}
-	if err := validateMigrationLedger(ctx, tx, migrations, true); err != nil {
-		t.Fatalf("validate migrated schema ledger: %v", err)
+	if err := validateMigrationLedger(ctx, tx, migrationsThrough005, true); err != nil {
+		t.Fatalf("validate schema ledger after the preserved 004-to-005 upgrade: %v", err)
 	}
 
 	var retainedResource, retainedBooking, retainedEvent, retainedSession int
@@ -861,7 +886,8 @@ func installResourceUpdateFailureTrigger(t *testing.T, admin *pgxpool.Pool, reso
 
 func installResourceActivityFailureTrigger(t *testing.T, admin *pgxpool.Pool, actorID, action string) func() {
 	t.Helper()
-	if action != "resource.created" && action != "resource.descriptive_edited" {
+	if action != "resource.created" && action != "resource.descriptive_edited" &&
+		action != "resource.activated" && action != "resource.deactivated" {
 		t.Fatalf("unsupported Resource Activity failure action %q", action)
 	}
 	suffix := strings.ReplaceAll(testDatabaseUUID(t, admin), "-", "")

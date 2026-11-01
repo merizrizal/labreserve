@@ -209,6 +209,11 @@ func installResourceCommitRejectionTrigger(
 			t.Fatalf("edit COMMIT rejection trigger requires only a Resource ID scope")
 		}
 		scope = fmt.Sprintf("NEW.resource_id = %s::uuid", sqlLiteral(resourceID))
+	case "resource.activated", "resource.deactivated":
+		if resourceID == "" || code != "" {
+			t.Fatalf("state COMMIT rejection trigger requires only a Resource ID scope")
+		}
+		scope = fmt.Sprintf("NEW.resource_id = %s::uuid", sqlLiteral(resourceID))
 	default:
 		t.Fatalf("unsupported Resource COMMIT rejection action %q", action)
 	}

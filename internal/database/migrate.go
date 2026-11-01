@@ -18,7 +18,7 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-const requiredSchemaVersion = "005_resource_mutations.sql"
+const requiredSchemaVersion = "006_resource_state.sql"
 const migrationLockID int64 = 0x4c61625265736572
 
 type migrationChecksum struct {
